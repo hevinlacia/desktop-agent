@@ -1,0 +1,3 @@
+# 项目工具链锁定。just 是统一命令入口，其余走系统 cargo / pnpm。
+[tools]
+just = "1.59"

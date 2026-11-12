@@ -1,0 +1,44 @@
+[package]
+name = "desktop-agent"
+version = "0.1.0"
+description = "个人桌面 AI Agent 客户端（Tauri v2 外壳 + 可插拔 Agent 后端）"
+authors = ["hevinlacia"]
+edition = "2021"
+rust-version = "1.85"
+
+[lib]
+name = "desktop_agent_lib"
+crate-type = ["lib"]
+
+[[bin]]
+name = "desktop-agent"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+# KWin 脚本通过 D-Bus 反调本进程，因此必须自带 session bus 服务。
+zbus = { version = "6", features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "io-util", "sync", "time", "rt", "macros"] }
+async-trait = "0.1"
+log = "0.4"
+env_logger = "0.11"
+dirs = "6"
+
+[features]
+default = ["custom-protocol"]
+# Tauri 打包时要求开启；dev 下走 dev server。
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+panic = "abort"

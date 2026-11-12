@@ -1,0 +1,6 @@
+# crates.io 直连在国内网络下不稳定；rsproxy 是镜像稀疏索引。
+[source.crates-io]
+replace-with = "rsproxy"
+
+[source.rsproxy]
+registry = "sparse+https://rsproxy.cn/index/"

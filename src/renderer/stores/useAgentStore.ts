@@ -19,7 +19,7 @@ import type {
   Usage,
   WindowMode,
 } from "@shared/protocol";
-import { agentClient, configClient, windowClient } from "@/services/agentClient";
+import { agentClient, cachedCommands, configClient, windowClient } from "@/services/agentClient";
 import type { AppConfig } from "@shared/protocol";
 
 /** 悬浮窗展开会话侧边栏时的窗口高度（逻辑像素）：表头 + 约 8 行会话。 */
@@ -57,6 +57,8 @@ interface AgentStore {
 
   // ---- 运行态 ----
   running: boolean;
+  /** 正在执行扩展斜杠命令（不跑模型）：与 running 区分，避免误显示「等待模型响应」。 */
+  commandRunning: boolean;
   compacting: boolean;
   live: LiveBlock[];
   toolExec: Record<string, ToolExecution>;
@@ -129,6 +131,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   stats: null,
   lastUsage: null,
   running: false,
+  commandRunning: false,
   compacting: false,
   live: [],
   toolExec: {},
@@ -318,16 +321,25 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         break;
 
       case "extensionUi": {
-        // 待决对话框（select/confirm/input/editor）不能被 notify 事件覆盖：
-        // 槽位被换成 notify 后对话框渲染为 null，宿主侧 pending promise 永不结算
-        // （ask 无 timeout 时无限等），agent 表现为永久卡死。notify 改走消息流。
-        const pending = get().extensionUi;
         const incoming = event.request;
-        if (pending && pending.kind !== "notify" && incoming.kind === "notify") {
+        // notify 是只读提示（绑定成功/失败等），永远进消息流。
+        // 旧实现把它塞进对话框槽位，而槽位只渲染 select/confirm/input/editor，
+        // notify 就静默丢了——绑定成功了却看不到任何提示（REQ-338 复测）。
+        if (incoming.kind === "notify") {
           set((s) => ({
             messages: [
               ...s.messages,
               notice(incoming.message, incoming.level === "error" ? "error" : "info"),
+            ],
+          }));
+          break;
+        }
+        // 待决对话框也不能被另一个对话框顶掉：锁住的 promise 会永远不结算。
+        if (get().extensionUi) {
+          set((s) => ({
+            messages: [
+              ...s.messages,
+              notice("已忽略一个新对话框（另有对话框未关闭）", "error"),
             ],
           }));
           break;
@@ -348,20 +360,50 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   async send(text) {
     const trimmed = text.trim();
     if (!trimmed) return;
-    // 乐观插入用户消息：pi 不回传 user 事件，等 messageCommitted 会缺一条。
-    set((s) => ({
-      messages: [...s.messages, { role: "user", text: trimmed, images: 0, timestamp: Date.now() }],
-      running: true,
-      live: [],
-    }));
+    // 斜杠命令先查是不是扩展命令：扩展命令只是交互入口（弹窗、绑定、开关），pi 在
+    // prompt() 里直接执行并回 "handled"，不跑模型。所以既不该把命令文本当成对话内容，
+    // 也不该进入「等待模型响应」（REQ-338 复测）。
+    const isCommand = trimmed.startsWith("/") && (await isExtensionCommandInput(trimmed));
+    const stamp = Date.now();
+    // 本次发送是否自己置起了 running（只有自己置起的才能自己收回）。
+    const ownsRun = !isCommand;
+    const alreadyRunning = get().running;
+    if (isCommand) {
+      set({ commandRunning: true });
+    } else {
+      // 乐观插入用户消息：pi 不回传 user 事件，等 messageCommitted 会缺一条。
+      set((s) => ({
+        messages: [...s.messages, userMessage(trimmed, stamp)],
+        running: true,
+        live: [],
+      }));
+    }
     try {
       // 运行中继续发消息按 steer 排队，符合"边看边纠偏"的使用习惯。
-      await agentClient.send(trimmed, {
+      const outcome = await agentClient.send(trimmed, {
         streamingBehavior: get().running ? "steer" : undefined,
       });
+      if (outcome === "handled") {
+        // 命令跑完了（没跑模型）：收工，并撕掉乐观插入的那条命令行。
+        // 注意不能盲清 running：模型正在跑时插一条扩展命令，那条运行不归本次发送管。
+        set((s) => ({
+          running: ownsRun || !alreadyRunning ? false : s.running,
+          commandRunning: false,
+          live: ownsRun ? [] : s.live,
+          messages: s.messages.filter((m) => !(m.role === "user" && m.timestamp === stamp)),
+        }));
+      } else if (isCommand) {
+        // 命令缓存过期（命令已删/改名）：pi 当普通输入跑了模型，补回消息与状态。
+        set((s) => ({
+          commandRunning: false,
+          running: true,
+          messages: [...s.messages, userMessage(trimmed, stamp)],
+        }));
+      }
     } catch (e) {
       set((s) => ({
         running: false,
+        commandRunning: false,
         messages: [...s.messages, notice(errText(e), "error")],
       }));
     }
@@ -532,6 +574,21 @@ function nextToolIndex(live: LiveBlock[]): number {
 
 function notice(text: string, level: "error" | "info" = "info"): ChatMessage {
   return { role: "notice", text, timestamp: Date.now(), ...(level === "error" ? { level } : {}) };
+}
+
+function userMessage(text: string, timestamp: number): ChatMessage {
+  return { role: "user", text, images: 0, timestamp };
+}
+
+/**
+ * 这条斜杠输入是不是「扩展命令」——与 pi 侧 prompt() 的判定同源：只有扩展命令会被
+ * 直接执行、不跑模型。命令列表取不到时按普通输入处理（宁多跑一次，不吞用户输入）。
+ */
+async function isExtensionCommandInput(trimmed: string): Promise<boolean> {
+  const token = trimmed.slice(1).split(/\s+/, 1)[0] ?? "";
+  if (!token) return false;
+  const commands = await cachedCommands();
+  return commands.some((command) => command.name === token && command.source === "extension");
 }
 
 function errText(e: unknown): string {

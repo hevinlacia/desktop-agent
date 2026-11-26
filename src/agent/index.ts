@@ -3,6 +3,7 @@
  * 通过 process.parentPort 与主进程收发结构化消息，协议见 src/shared/agentIpc.ts。
  */
 import type { AgentRequest, AgentToMain } from "../shared/agentIpc";
+import { shouldPreempt } from "./dispatch";
 import { AgentHost, errorMessage } from "./host";
 
 type PiModule = typeof import("@earendil-works/pi-coding-agent");
@@ -21,10 +22,16 @@ const log = (level: "info" | "warn" | "error", message: string): void => {
 
 let host: Promise<AgentHost> | null = null;
 // 串行处理：命令之间保持先后顺序，init 必须最先完成。
+// 例外：应答类命令（扩展对话框回答、中止）必须直接处理——排在正在跑的 prompt
+// 后面就是自己等自己（扩展命令正在等这条回答），实测会死锁（REQ-338）。
 let queue: Promise<unknown> = Promise.resolve();
 
 process.parentPort.on("message", (event: { data: unknown }) => {
   const req = event.data as AgentRequest;
+  if (shouldPreempt(req.cmd) && host) {
+    void handle(req);
+    return;
+  }
   queue = queue.then(
     () => handle(req),
     () => handle(req),

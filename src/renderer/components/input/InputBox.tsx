@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Expand, Loader2, Square } from "lucide-react";
 import { useAgentStore } from "@/stores/useAgentStore";
-import { agentClient, windowClient } from "@/services/agentClient";
+import { cachedCommands, windowClient } from "@/services/agentClient";
 import type { SlashCommand } from "@shared/protocol";
 import { CommandSuggestions } from "./CommandSuggestions";
 import { cn } from "@/lib/utils";
@@ -60,8 +60,7 @@ export function InputBox({ compact }: { compact: boolean }) {
     if (query === null) return;
     if (commands && Date.now() - commands.fetchedAt < COMMANDS_TTL_MS) return;
     let cancelled = false;
-    agentClient
-      .commands()
+    cachedCommands()
       .then((list) => {
         if (!cancelled) setCommands({ list, fetchedAt: Date.now() });
       })

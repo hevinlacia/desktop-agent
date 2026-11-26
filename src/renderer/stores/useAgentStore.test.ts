@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionUiRequest } from "@shared/protocol";
+import type { ExtensionUiRequest, SlashCommand } from "@shared/protocol";
 
 // store 模块顶层就引用 agentClient（IPC 出口），单测里统一换成内存桩。
+const commands: SlashCommand[] = [
+  { name: "panel-req-list", description: "绑定需求", source: "extension" },
+  { name: "review", description: "模板", source: "prompt" },
+];
+
+const sendOutcome = vi.hoisted(() => ({ value: "started" as "started" | "queued" | "handled" }));
+
 vi.mock("@/services/agentClient", () => ({
   agentClient: {
     state: vi.fn(async () => ({
@@ -9,7 +16,7 @@ vi.mock("@/services/agentClient", () => ({
       messages: [],
       running: false,
     })),
-    send: vi.fn(async () => ({ stopReason: "stop" })),
+    send: vi.fn(async () => sendOutcome.value),
     abort: vi.fn(async () => undefined),
     newSession: vi.fn(async () => undefined),
     switchSession: vi.fn(async () => undefined),
@@ -18,6 +25,7 @@ vi.mock("@/services/agentClient", () => ({
     setThinkingLevel: vi.fn(async () => undefined),
     respondExtensionUi: vi.fn(async () => undefined),
   },
+  cachedCommands: vi.fn(async () => commands),
   configClient: {
     get: vi.fn(async () => null),
     set: vi.fn(async () => undefined),
@@ -46,15 +54,20 @@ function selectRequest(id: string): ExtensionUiRequest {
   };
 }
 
+const notices = () => useAgentStore.getState().messages.filter((m) => m.role === "notice");
+const userMessages = () => useAgentStore.getState().messages.filter((m) => m.role === "user");
+
 describe("useAgentStore 扩展 UI 对话框（REQ-338）", () => {
   beforeEach(() => {
-    // 重置到干净状态并固定当前会话，避免 sessionId 过滤丢事件。
     useAgentStore.setState({
       sessionId: SID,
       extensionUi: null,
       messages: [],
       running: false,
+      commandRunning: false,
     });
+    sendOutcome.value = "started";
+    vi.mocked(agentClient.send).mockClear();
   });
 
   it("select 请求进入对话框槽位", () => {
@@ -67,7 +80,17 @@ describe("useAgentStore 扩展 UI 对话框（REQ-338）", () => {
     expect(useAgentStore.getState().extensionUi?.id).toBe("ui-1");
   });
 
-  it("待决 select 期间到达的 notify 不顶掉对话框，转消息流（卡死修复）", () => {
+  it("notify 永远进消息流，不占对话框槽位（否则绑定提示会静默丢失）", () => {
+    useAgentStore.getState().applyEvent({
+      type: "extensionUi",
+      sessionId: SID,
+      request: { kind: "notify", id: "", message: "✅ 已绑定需求 REQ-1", level: "info" },
+    });
+    expect(useAgentStore.getState().extensionUi).toBeNull();
+    expect(notices().at(-1)?.text).toBe("✅ 已绑定需求 REQ-1");
+  });
+
+  it("待决 select 期间到达的 notify 既不顶掉对话框也不丢", () => {
     useAgentStore.getState().applyEvent({
       type: "extensionUi",
       sessionId: SID,
@@ -81,21 +104,24 @@ describe("useAgentStore 扩展 UI 对话框（REQ-338）", () => {
     const ui = useAgentStore.getState().extensionUi;
     expect(ui?.kind).toBe("select");
     expect(ui?.id).toBe("ui-1");
-    const notices = useAgentStore.getState().messages.filter((m) => m.role === "notice");
-    expect(notices.at(-1)?.text).toBe("绑定成功");
+    expect(notices().at(-1)?.text).toBe("绑定成功");
   });
 
-  it("无待决对话框时 notify 照旧进槽位", () => {
+  it("待决对话框不会被另一个对话框顶掉（锁住的 promise 不结算）", () => {
     useAgentStore.getState().applyEvent({
       type: "extensionUi",
       sessionId: SID,
-      request: { kind: "notify", id: "", message: "hello", level: "info" },
+      request: selectRequest("ui-1"),
     });
-    expect(useAgentStore.getState().extensionUi?.kind).toBe("notify");
+    useAgentStore.getState().applyEvent({
+      type: "extensionUi",
+      sessionId: SID,
+      request: { kind: "confirm", id: "ui-2", title: "确认?", message: "x" },
+    });
+    expect(useAgentStore.getState().extensionUi?.id).toBe("ui-1");
   });
 
   it("respondUi 的 select 空串作答兜底到第一个选项", async () => {
-    
     useAgentStore.getState().applyEvent({
       type: "extensionUi",
       sessionId: SID,
@@ -108,5 +134,69 @@ describe("useAgentStore 扩展 UI 对话框（REQ-338）", () => {
       value: "REQ-0 | 需求 0",
     });
     expect(useAgentStore.getState().extensionUi).toBeNull();
+  });
+});
+
+describe("useAgentStore 发送斜杠命令（REQ-338 复测）", () => {
+  beforeEach(() => {
+    useAgentStore.setState({
+      sessionId: SID,
+      extensionUi: null,
+      messages: [],
+      running: false,
+      commandRunning: false,
+    });
+    vi.mocked(agentClient.send).mockClear();
+  });
+
+  it("扩展命令不进对话内容、不显示等待模型响应，执行完自动收尾", async () => {
+    sendOutcome.value = "handled";
+    await useAgentStore.getState().send("/panel-req-list");
+    expect(userMessages()).toHaveLength(0);
+    expect(useAgentStore.getState().running).toBe(false);
+    expect(useAgentStore.getState().commandRunning).toBe(false);
+  });
+
+  it("扩展命令执行期间是「执行命令中」而非「等待模型响应」", async () => {
+    sendOutcome.value = "handled";
+    let midCommand: { running: boolean; commandRunning: boolean } | null = null;
+    vi.mocked(agentClient.send).mockImplementationOnce(async () => {
+      const s = useAgentStore.getState();
+      midCommand = { running: s.running, commandRunning: s.commandRunning };
+      return "handled" as const;
+    });
+    await useAgentStore.getState().send("/panel-req-list");
+    expect(midCommand).toEqual({ running: false, commandRunning: true });
+  });
+
+  it("普通消息照旧乐观插入并保持运行态", async () => {
+    sendOutcome.value = "started";
+    await useAgentStore.getState().send("帮我看看这个报错");
+    expect(userMessages()).toHaveLength(1);
+    expect(useAgentStore.getState().running).toBe(true);
+  });
+
+  it("prompt 模板命令（非 extension）按普通输入对待", async () => {
+    sendOutcome.value = "started";
+    await useAgentStore.getState().send("/review");
+    expect(userMessages()).toHaveLength(1);
+  });
+
+  it("命令缓存过期（pi 当成普通输入跑了模型）时补回消息", async () => {
+    sendOutcome.value = "started";
+    await useAgentStore.getState().send("/panel-req-list");
+    expect(userMessages().map((m) => m.role === "user" && m.text)).toEqual(["/panel-req-list"]);
+    expect(useAgentStore.getState().running).toBe(true);
+  });
+
+  it("模型跑着的时候插一条扩展命令，不能把那次运行收掉", async () => {
+    sendOutcome.value = "handled";
+    useAgentStore.setState({ running: true, live: [{ contentIndex: 0, kind: "text", text: "半截输出" }] });
+    await useAgentStore.getState().send("/panel-req-list");
+    const s = useAgentStore.getState();
+    expect(s.running).toBe(true);
+    expect(s.live).toHaveLength(1);
+    expect(s.commandRunning).toBe(false);
+    expect(userMessages()).toHaveLength(0);
   });
 });

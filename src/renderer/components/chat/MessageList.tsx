@@ -14,6 +14,7 @@ export function MessageList() {
   const messages = useAgentStore((s) => s.messages);
   const live = useAgentStore((s) => s.live);
   const running = useAgentStore((s) => s.running);
+  const commandRunning = useAgentStore((s) => s.commandRunning);
   const compacting = useAgentStore((s) => s.compacting);
   const toolExec = useAgentStore((s) => s.toolExec);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -49,6 +50,14 @@ export function MessageList() {
         <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-ink-muted">
           <Loader2 size={12} className="animate-spin" />
           等待模型响应…
+        </div>
+      )}
+
+      {/* 扩展斜杠命令不跑模型，不能显示「等待模型响应」（会误以为卡死）。 */}
+      {commandRunning && !running && (
+        <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-ink-muted">
+          <Loader2 size={12} className="animate-spin" />
+          执行命令中…
         </div>
       )}
 

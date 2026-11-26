@@ -9,6 +9,7 @@ import type {
   ExtensionUiResponse,
   PromptOutcome,
   SessionSummary,
+  SlashCommand,
   WindowMode,
 } from "@shared/protocol";
 import type { CommandIO, CommandName, EventChannel, EventPayloads, IpcResult } from "@shared/bridge";
@@ -104,3 +105,25 @@ export const configClient = {
 };
 
 export type { SessionSummary };
+
+/** 斜杠命令列表的缓存有效期：扩展和 skill 可能在运行中变化，但不必每次发送都问一遍。 */
+const COMMANDS_TTL_MS = 30_000;
+let commandsCache: { list: SlashCommand[]; fetchedAt: number } | null = null;
+
+/**
+ * 带缓存的命令列表（联想、以及 `send()` 判断「是不是扩展命令」共用）。
+ * 取不到就当没有命令——调用方按普通输入处理，不会卡住发送。
+ */
+export async function cachedCommands(): Promise<SlashCommand[]> {
+  if (commandsCache && Date.now() - commandsCache.fetchedAt < COMMANDS_TTL_MS) {
+    return commandsCache.list;
+  }
+  try {
+    const list = await agentClient.commands();
+    commandsCache = { list, fetchedAt: Date.now() };
+    return list;
+  } catch {
+    // 失败不写缓存：下次发送再试。返回空表示「不知道」，调用方降级。
+    return commandsCache?.list ?? [];
+  }
+}

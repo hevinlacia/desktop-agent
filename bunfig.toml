@@ -1,0 +1,9 @@
+# Bun 的项目级配置。Bun 只读这个文件；.npmrc 里除 registry / 鉴权外的键它不认。
+
+[install]
+# 国内网络走 npmmirror。
+registry = "https://registry.npmmirror.com"
+# Bun 默认不执行依赖的安装脚本，只有这里列出的包例外。
+# 只需要 esbuild：它的 postinstall 下载平台二进制，vite / tsc 要用。
+# electron 不需要——Electron 45 起没有 postinstall，二进制在首次运行时才下载，`just install` 会提前下好。
+trustedPackages = ["esbuild"]

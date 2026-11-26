@@ -1,6 +1,0 @@
-allowBuilds:
-  esbuild: true
-# pnpm 10+ 把 build script 白名单移到 workspace 配置。
-# esbuild 需要 postinstall 下载平台二进制，否则 vite/tsc 无法运行。
-onlyBuiltDependencies:
-  - esbuild

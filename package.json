@@ -1,21 +1,27 @@
 {
   "name": "desktop-agent",
+  "productName": "Desktop Agent",
+  "version": "0.2.0",
+  "description": "个人桌面 AI Agent 客户端：Electron + React，Agent 能力由 pi SDK 子进程提供",
   "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "packageManager": "pnpm@11.7.0",
+  "homepage": "https://github.com/hevinlacia/desktop-agent",
+  "main": "out/main/index.js",
+  "desktopName": "desktop-agent.desktop",
+  "author": "hevinlacia",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "package": "just package"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.12.4",
-    "@tauri-apps/plugin-opener": "2.7.3",
+    "@earendil-works/pi-coding-agent": "1.6.1",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "lucide-react": "1.72.0",
@@ -29,12 +35,16 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.5",
-    "@tauri-apps/cli": "2.12.4",
+    "@types/node": "24.19.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
+    "electron": "45.5.0",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
     "tailwindcss": "4.3.5",
     "typescript": "5.9.3",
-    "vite": "7.3.8"
+    "vite": "7.3.8",
+    "vitest": "5.1.2"
   }
 }

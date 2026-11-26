@@ -5,7 +5,7 @@
  * 流程：等 Agent 就绪 → 完整形态下取布局快照与窗口截图 → 宿主切到悬浮窗 → 再取一次
  * → 回到完整形态，走界面路径真实提问一轮 → 经 `desktop-agent ask` 从外部再提问一轮
  * → 点一个链接，确认只交给系统浏览器 → 输入 / 验证斜杠命令联想
- * → 改一次工作目录再改回 → 最大化 / 切形态 / 还原 → 写 result.json 后退出。
+ * → 改一次工作目录再改回 → 最大化 / 切形态 / 还原 → 点模型名切换模型再切回 → 写 result.json 后退出。
  * 退出码：0 通过；1 断言失败；2 超时。
  *
  * 自检模式下会话不落盘（见 index.ts 的 agentOptions），测试提问不会出现在 pi 的会话列表里。
@@ -46,6 +46,9 @@ interface LayoutProbe {
   commandSuggestions: number;
   /** 标题栏上是否出现了「还原」按钮（即窗口处于最大化）。 */
   restoreButton: boolean;
+  /** 模型切换列表：行数与是否标出了当前模型（0 / false = 没有打开或没加载出来）。 */
+  modelOptions: number;
+  currentModelOption: boolean;
   title: string;
 }
 
@@ -317,12 +320,95 @@ export async function runSelfTest(ctx: SelfTestContext, outDir: string): Promise
       }
 
       ctx.toggleMaximize();
-      const restored = await until(() => !ctx.isMaximized(), 3_000);
+      // 还原后必须回到对话窗口的尺寸：合成器记住的「最大化前尺寸」可能还是悬浮窗的。
+      const fullSize = { width: ctx.getConfig().fullWidth, height: ctx.getConfig().fullHeight };
+      const restored = await until(
+        () => !ctx.isMaximized() && sizeOf(ctx.win).width === fullSize.width && sizeOf(ctx.win).height === fullSize.height,
+        5_000,
+      );
       await sleep(200);
-      const afterRestore = { maximized: ctx.isMaximized(), remembered: ctx.getConfig().fullMaximized };
+      const afterRestore = {
+        maximized: ctx.isMaximized(),
+        remembered: ctx.getConfig().fullMaximized,
+        size: sizeOf(ctx.win),
+      };
       state.afterRestore = afterRestore;
       if (!restored || afterRestore.maximized || afterRestore.remembered) {
-        throw new Error(`第 ${round} 轮：还原后窗口状态或配置没有更新`);
+        throw new Error(`第 ${round} 轮：还原后窗口状态、尺寸或配置没有更新：${JSON.stringify(afterRestore)}`);
+      }
+    }
+
+    // 10) 模型切换：点标题栏的模型名弹出可选模型列表，里面要标出当前模型；切到另一个，再切回来。
+    //    切换只影响当前会话（不传 persist），不会动 pi 的全局默认模型。
+    const modelReport: Record<string, unknown> = {};
+    report.modelPicker = modelReport;
+    const openPicker = async () => {
+      const opened = (await ctx.win.webContents.executeJavaScript(`(() => {
+        const chip = document.querySelector('button[aria-label="切换模型"]');
+        if (!chip) return false;
+        chip.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        return true;
+      })()`)) as boolean;
+      if (!opened) throw new Error("标题栏上没有模型切换按钮");
+      const listed = await waitFor(ctx.win, (p) => p.modelOptions > 0, 15_000);
+      return listed;
+    };
+    const originalModel = (await ctx.agent.state()).model;
+    const first = await openPicker();
+    modelReport.options = first.modelOptions;
+    modelReport.currentListed = first.currentModelOption;
+    await sleep(350);
+    await snapshot(ctx.win, outDir, "5-models.png");
+    if (first.modelOptions === 0) throw new Error("模型列表为空或一直没加载出来");
+    if (!first.currentModelOption) throw new Error("模型列表里没有标出当前模型");
+    if (originalModel) {
+      const other = (await ctx.win.webContents.executeJavaScript(`(() => {
+        const el = document.querySelector('[data-role="model-option"][data-current="false"]');
+        return el ? { provider: el.getAttribute("data-provider"), id: el.getAttribute("data-model-id") } : null;
+      })()`)) as { provider: string; id: string } | null;
+      modelReport.other = other ? `${other.provider}/${other.id}` : null;
+      if (other) {
+        const usesModel = async (m: { provider: string; id: string }) => {
+          const current = (await ctx.agent.state()).model;
+          return !!current && current.provider === m.provider && current.id === m.id;
+        };
+        await clickModelOption(ctx.win, other);
+        const switched = await until(() => usesModel(other), 15_000);
+        if (!switched) throw new Error(`选了模型 ${other.provider}/${other.id}，但会话的模型没有变`);
+        modelReport.remembered = ctx.getConfig().lastModel;
+        if (ctx.getConfig().lastModel?.id !== other.id) throw new Error("切换模型后没有把它记成「上个会话使用的模型」");
+
+        // 新建会话沿用上个会话使用的模型。
+        const beforeNew = (await ctx.agent.state()).sessionId;
+        if (!(await clickNewSession(ctx.win))) throw new Error("没有找到「新建会话」按钮");
+        const inherited = await until(async () => {
+          const s = await ctx.agent.state();
+          return s.sessionId !== beforeNew && s.model?.provider === other.provider && s.model?.id === other.id;
+        }, 15_000);
+        modelReport.newSessionInherits = inherited;
+        if (!inherited) throw new Error("新建会话没有沿用上个会话使用的模型");
+
+        // 重启 Agent（对应「重启应用」）：启动时的会话要用配置里记住的模型。
+        // 用扩展开关触发重启——它是子进程的启动参数，验完再改回去。
+        const extensionsBefore = ctx.getConfig().extensions;
+        const sessionBeforeRestart = (await ctx.agent.state()).sessionId;
+        ctx.applyConfig({ ...ctx.getConfig(), extensions: !extensionsBefore });
+        const afterRestart = await until(async () => {
+          const s = await ctx.agent.state();
+          return s.sessionId !== sessionBeforeRestart && s.model?.provider === other.provider && s.model?.id === other.id;
+        }, 30_000);
+        modelReport.survivesRestart = afterRestart;
+        if (!afterRestart) throw new Error("Agent 重启后，启动时的会话没有沿用记住的模型");
+        ctx.applyConfig({ ...ctx.getConfig(), extensions: extensionsBefore });
+        const backAgain = await until(() => usesModel(other), 30_000);
+        if (!backAgain) throw new Error("扩展开关改回去后 Agent 没有恢复，或记住的模型丢了");
+
+        await openPicker();
+        await clickModelOption(ctx.win, originalModel);
+        const restoredModel = await until(() => usesModel(originalModel), 15_000);
+        modelReport.restored = restoredModel;
+        if (!restoredModel) throw new Error("没有切回原来的模型");
+        modelReport.rememberedAfterRestore = ctx.getConfig().lastModel;
       }
     }
   }
@@ -409,6 +495,8 @@ async function probeLayout(win: BrowserWindow): Promise<LayoutProbe> {
       inputValue: document.querySelector("textarea")?.value ?? "",
       commandSuggestions: document.querySelectorAll('[data-role="command-suggestion"]').length,
       restoreButton: !!document.querySelector('button[aria-label="还原"]'),
+      modelOptions: document.querySelectorAll('[data-role="model-option"]').length,
+      currentModelOption: !!document.querySelector('[data-role="model-option"][data-current="true"]'),
       title: document.title,
     };
   })()`) as Promise<LayoutProbe>;
@@ -454,6 +542,17 @@ function pressKey(win: BrowserWindow, key: string): Promise<void> {
 async function typeAndSubmit(win: BrowserWindow, text: string): Promise<void> {
   await typeInto(win, text);
   await pressKey(win, "Enter");
+}
+
+/** 在模型列表里点一项（列表必须已经打开）。 */
+function clickModelOption(win: BrowserWindow, model: { provider: string; id: string }): Promise<void> {
+  return win.webContents.executeJavaScript(`(() => {
+    const el = document.querySelector(
+      '[data-role="model-option"][data-provider=${JSON.stringify(model.provider)}][data-model-id=${JSON.stringify(model.id)}]',
+    );
+    if (!el) return;
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  })()`) as Promise<void>;
 }
 
 /** 轮询到条件成立为止；超时返回 false。条件里的请求可能因 Agent 重启被拒，捕获后重试。 */

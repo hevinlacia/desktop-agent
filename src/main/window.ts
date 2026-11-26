@@ -10,11 +10,15 @@ import { getConfig, saveConfig } from "./config";
 import { isWebUrl } from "./externalUrl";
 import { MIN_WINDOW, resolveSize } from "../shared/config";
 import { WINDOW_MAXIMIZED_CHANNEL, WINDOW_MODE_CHANNEL } from "../shared/bridge";
-import type { AppConfig, WindowMode } from "../shared/protocol";
+import type { WindowMode } from "../shared/protocol";
 
 let win: BrowserWindow | null = null;
 let mode: WindowMode = "compact";
 let quitting = false;
+/** 刚从悬浮窗切回对话窗口：此刻若立刻最大化，合成器记住的「最大化前尺寸」可能还是悬浮窗的。 */
+let justReturnedFromCompact = false;
+/** 还原最大化后需要把尺寸纠正成对话窗口的（见上）。 */
+let fixRestoredSize = false;
 
 export function currentMode(): WindowMode {
   return mode;
@@ -105,6 +109,7 @@ function applyMode(target: WindowMode): void {
   if (!w) return;
   const cfg = getConfig();
   const full = target === "full";
+  const fromCompact = mode === "compact";
   // 先改形态再动窗口：还原最大化会触发 unmaximize 事件，处理它的代码要靠它知道已经不在对话窗口形态，
   // 否则切形态时的那一次还原会把「最大化偏好」冲掉。
   mode = target;
@@ -113,33 +118,42 @@ function applyMode(target: WindowMode): void {
     w.unmaximize();
     // 还原是合成器异步完成的（Wayland 上尤其明显），它完成时会把窗口恢复成最大化之前的尺寸，
     // 盖掉下面设的值；而「还原完成」的通知可能早于尺寸落地。所以分几次补设，直到尺寸对上。
-    settleCompactSize(w, cfg, 100, 4);
+    settleSize(w, cfg.compactWidth, cfg.compactHeight, "compact", 100, 4);
   }
   w.setSize(full ? cfg.fullWidth : cfg.compactWidth, full ? cfg.fullHeight : cfg.compactHeight, true);
   // Wayland 不允许客户端置顶，这一项在 KDE 上不生效。需要的话用窗口规则「保持在最前」。
   w.setAlwaysOnTop(!full, "floating");
   w.setSkipTaskbar(!full);
+  justReturnedFromCompact = full && fromCompact;
 }
 
 /** 按记住的偏好最大化对话窗口。 */
 function restoreMaximize(): void {
   const w = live();
-  if (w && getConfig().fullMaximized && !w.isMaximized()) w.maximize();
+  if (!w || !getConfig().fullMaximized || w.isMaximized()) return;
+  // 紧接着「从悬浮窗切回来」就最大化：合成器记住的最大化前尺寸可能还是悬浮窗的，还原后要纠正。
+  if (justReturnedFromCompact) fixRestoredSize = true;
+  justReturnedFromCompact = false;
+  w.maximize();
 }
 
 /**
- * 从最大化切到悬浮窗后核对尺寸，不对就补设。间隔逐次加倍（100、200、400、800ms），
- * 合成器慢一点也兜得住，总共也只有几次。
- * 形态已经不是悬浮窗、或窗口又最大化了，就停手，别把用户后来的操作盖掉。
+ * 核对窗口尺寸，不对就补设。间隔逐次加倍（从 delayMs 起），合成器慢一点也兜得住。
+ * 形态已经不是 expected、或窗口处于最大化，就停手，别把用户后来的操作盖掉。
  */
-function settleCompactSize(w: BrowserWindow, cfg: AppConfig, delayMs: number, attempts: number): void {
+function settleSize(
+  w: BrowserWindow,
+  width: number,
+  height: number,
+  expected: WindowMode,
+  delayMs: number,
+  attempts: number,
+): void {
   setTimeout(() => {
-    if (w.isDestroyed() || mode !== "compact" || w.isMaximized()) return;
-    const [width, height] = w.getSize();
-    if (width !== cfg.compactWidth || height !== cfg.compactHeight) {
-      w.setSize(cfg.compactWidth, cfg.compactHeight, false);
-    }
-    if (attempts > 1) settleCompactSize(w, cfg, delayMs * 2, attempts - 1);
+    if (w.isDestroyed() || mode !== expected || w.isMaximized()) return;
+    const [currentWidth, currentHeight] = w.getSize();
+    if (currentWidth !== width || currentHeight !== height) w.setSize(width, height, false);
+    if (attempts > 1) settleSize(w, width, height, expected, delayMs * 2, attempts - 1);
   }, delayMs);
 }
 
@@ -157,6 +171,11 @@ function syncMaximized(): void {
       console.error("保存窗口最大化偏好失败：", err);
     }
   }
+  if (!maximized && fixRestoredSize) {
+    fixRestoredSize = false;
+    const cfg = getConfig();
+    settleSize(w, cfg.fullWidth, cfg.fullHeight, "full", 100, 4);
+  }
   w.webContents.send(WINDOW_MAXIMIZED_CHANNEL, maximized);
 }
 
@@ -169,8 +188,15 @@ export function isMaximized(): boolean {
 export function toggleMaximize(): void {
   const w = live();
   if (!w) return;
-  if (w.isMaximized()) w.unmaximize();
-  else w.maximize();
+  if (w.isMaximized()) {
+    // 还原：「是否需要纠正尺寸」留给 syncMaximized 判断（从悬浮窗切回来后立刻最大化的那种情况要纠正）。
+    w.unmaximize();
+    return;
+  }
+  // 用户主动最大化：还原时该回到当下的尺寸，不需要纠正。
+  justReturnedFromCompact = false;
+  fixRestoredSize = false;
+  w.maximize();
 }
 
 /** 显示并聚焦到指定形态。 */

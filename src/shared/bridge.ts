@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   AppConfig,
   ExtensionUiResponse,
+  ModelInfo,
   PromptOutcome,
   SessionState,
   SessionStats,
@@ -55,6 +56,7 @@ export const COMMANDS = [
   "agent_extension_ui_response",
   "agent_sessions",
   "agent_commands",
+  "agent_models",
   "window_hide",
   "window_switch_mode",
   "window_mode",
@@ -84,6 +86,8 @@ export interface CommandIO {
   agent_sessions: { args: null; result: SessionSummary[] };
   /** 斜杠命令联想用的命令列表。 */
   agent_commands: { args: null; result: SlashCommand[] };
+  /** 切换模型用的可选列表：当前有可用凭据的模型。 */
+  agent_models: { args: null; result: ModelInfo[] };
   window_hide: { args: null; result: void };
   window_switch_mode: { args: { mode: WindowMode }; result: void };
   window_mode: { args: null; result: WindowMode };

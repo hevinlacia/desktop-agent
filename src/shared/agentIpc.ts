@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
   ExtensionUiResponse,
+  ModelInfo,
+  ModelRef,
   PromptOutcome,
   SessionState,
   SessionStats,
@@ -17,6 +19,8 @@ export interface AgentInitOptions {
   cwd: string;
   persistSession: boolean;
   extensions: boolean;
+  /** 上个会话使用的模型：启动时的新会话与之后新建的会话沿用。 */
+  lastModel: ModelRef | null;
 }
 
 export type LogLevel = "info" | "warn" | "error";
@@ -31,6 +35,7 @@ export type AgentRequest =
   | { id: number; cmd: "switchSession"; sessionPath: string }
   | { id: number; cmd: "sessions" }
   | { id: number; cmd: "commands" }
+  | { id: number; cmd: "models" }
   | { id: number; cmd: "stats" }
   | { id: number; cmd: "setModel"; provider: string; modelId: string }
   | { id: number; cmd: "setThinkingLevel"; level: string }
@@ -47,6 +52,7 @@ export interface AgentReplies {
   switchSession: null;
   sessions: SessionSummary[];
   commands: SlashCommand[];
+  models: ModelInfo[];
   stats: SessionStats;
   setModel: null;
   setThinkingLevel: null;

@@ -25,6 +25,13 @@ describe("resolveConfig", () => {
     expect(cfg).toEqual(defaultConfig(HOME));
   });
 
+  it("lastModel 要 provider 和 id 都齐全，否则当作没有", () => {
+    expect(resolveConfig({ lastModel: { provider: "p", id: "m" } }, HOME).lastModel).toEqual({ provider: "p", id: "m" });
+    expect(resolveConfig({ lastModel: { provider: "p" } }, HOME).lastModel).toBeNull();
+    expect(resolveConfig({ lastModel: "p/m" }, HOME).lastModel).toBeNull();
+    expect(defaultConfig(HOME).lastModel).toBeNull();
+  });
+
   it("工作目录开头的 ~ 展开为家目录，其余路径原样保留", () => {
     expect(resolveConfig({ cwd: "~" }, HOME).cwd).toBe(HOME);
     expect(resolveConfig({ cwd: "~/Developer/tools" }, HOME).cwd).toBe(`${HOME}/Developer/tools`);

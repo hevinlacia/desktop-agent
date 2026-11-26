@@ -17,6 +17,7 @@ export function defaultConfig(homeDir: string): AppConfig {
     fullWidth: 1080,
     fullHeight: 720,
     fullMaximized: false,
+    lastModel: null,
   };
 }
 
@@ -37,6 +38,7 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
     fullWidth: num(raw.fullWidth, d.fullWidth, MIN_WINDOW.width),
     fullHeight: num(raw.fullHeight, d.fullHeight, MIN_FULL_HEIGHT),
     fullMaximized: bool(raw.fullMaximized, d.fullMaximized),
+    lastModel: modelRef(raw.lastModel),
   };
 }
 
@@ -44,6 +46,14 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
 function expandHome(dir: string, homeDir: string): string {
   if (dir === "~") return homeDir;
   return dir.startsWith("~/") ? homeDir + dir.slice(1) : dir;
+}
+
+/** 模型引用要 provider 和 id 都齐全才有效，否则当作没有。 */
+function modelRef(v: unknown): { provider: string; id: string } | null {
+  if (!isRecord(v)) return null;
+  const provider = text(v.provider);
+  const id = text(v.id);
+  return provider && id ? { provider, id } : null;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

@@ -1,6 +1,7 @@
 import { Copy, MessageSquarePlus, MoreHorizontal, PanelTop, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAgentStore } from "@/stores/useAgentStore";
+import { ModelPicker } from "./ModelPicker";
 import {
   agentClient,
   onMaximizedChanged,
@@ -17,9 +18,7 @@ import type { WindowMode } from "@shared/protocol";
 export function TitleBar({ mode }: { mode: WindowMode }) {
   const sessionName = useAgentStore((s) => s.sessionName);
   const stats = useAgentStore((s) => s.stats);
-  const model = useAgentStore((s) => s.model);
-  const setMode = useAgentStore((s) => s.setMode);
-  const newSession = useAgentStore((s) => s.newSession);
+  const setMode = useAgentStore((s) => s.setMode);  const newSession = useAgentStore((s) => s.newSession);
 
   const pct = stats?.contextUsage?.percent ?? null;
   const [maximized, setMaximized] = useState(false);
@@ -35,20 +34,14 @@ export function TitleBar({ mode }: { mode: WindowMode }) {
     <div
       className="app-drag flex h-8 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-raised px-2.5"
     >
-      <div
-        className="app-drag flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] text-ink-muted"
-      >
-        <span className="shrink-0 font-medium text-ink/80">Desktop Agent</span>
+      <span className="app-drag shrink-0 text-[11.5px] font-medium text-ink/80">Desktop Agent</span>
+      {/* 模型名紧跟着标题、可点开切换；有会话名时排在模型名后面。 */}
+      <ModelPicker />
+      <div className="app-drag flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] text-ink-muted">
         {sessionName && (
           <>
             <span className="shrink-0 opacity-40">·</span>
             <span className="truncate">{sessionName}</span>
-          </>
-        )}
-        {!sessionName && model && (
-          <>
-            <span className="shrink-0 opacity-40">·</span>
-            <span className="truncate">{model.name}</span>
           </>
         )}
       </div>

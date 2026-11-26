@@ -154,6 +154,12 @@ export interface SlashCommand {
 /** 托盘/快捷键能触发的窗口形态。 */
 export type WindowMode = "compact" | "full";
 
+/** 定位一个模型：provider + 模型 id。 */
+export interface ModelRef {
+  provider: string;
+  id: string;
+}
+
 export interface AppConfig {
   /** Agent 工作目录：工具 cwd、项目资源发现、会话按此目录分组。 */
   cwd: string;
@@ -171,4 +177,6 @@ export interface AppConfig {
   fullHeight: number;
   /** 对话窗口是否最大化。记住用户的选择：切到悬浮窗再回来、下次启动都照此恢复。 */
   fullMaximized: boolean;
+  /** 上个会话使用的模型：新建会话时沿用。为空或该模型已不可用时回落到 pi 的默认模型。 */
+  lastModel: ModelRef | null;
 }

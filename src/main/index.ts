@@ -215,11 +215,15 @@ function createHandlers(): CommandHandlers {
     agent_new_session: () => agent.newSession(),
     agent_switch_session: ({ sessionPath }) => agent.switchSession(sessionPath),
     agent_stats: () => agent.stats(),
-    agent_set_model: ({ provider, modelId }) => agent.setModel(provider, modelId),
+    agent_set_model: async ({ provider, modelId }) => {
+      await agent.setModel(provider, modelId);
+      rememberModel(provider, modelId);
+    },
     agent_set_thinking_level: ({ level }) => agent.setThinkingLevel(level),
     agent_extension_ui_response: ({ response }) => agent.respondExtensionUi(response),
     agent_sessions: () => agent.sessions(),
     agent_commands: () => agent.commands(),
+    agent_models: () => agent.models(),
     window_hide: () => hideWindow(),
     window_switch_mode: ({ mode }) => switchMode(mode),
     window_mode: () => currentMode(),
@@ -287,10 +291,19 @@ function sendBootError(message: string): void {
   sendToRenderer(AGENT_BOOT_ERROR_CHANNEL, message);
 }
 
+/** 记住这个模型：新建会话时沿用。写配置失败只影响下次，不影响本次切换。 */
+function rememberModel(provider: string, modelId: string): void {
+  try {
+    saveConfig({ ...getConfig(), lastModel: { provider, id: modelId } });
+  } catch (err) {
+    console.error("记住上次使用的模型失败：", err);
+  }
+}
+
 function agentOptions(cfg: AppConfig): AgentInitOptions {
   // 自检模式下会话不落盘：测试提问不能在 pi 的会话目录里留下文件。
   const persistSession = process.env.DESKTOP_AGENT_SELFTEST ? false : cfg.persistSession;
-  return { cwd: cfg.cwd, persistSession, extensions: cfg.extensions };
+  return { cwd: cfg.cwd, persistSession, extensions: cfg.extensions, lastModel: cfg.lastModel };
 }
 
 function errorMessage(err: unknown): string {

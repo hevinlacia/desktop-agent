@@ -48,14 +48,14 @@ just dev       # 开发模式：渲染进程热更新，主进程改动自动重
 
 ```bash
 just package
-# release/desktop-agent-0.2.1-x64.pkg.tar.xz
-sudo pacman -U release/desktop-agent-0.2.1-x64.pkg.tar.xz
+# release/desktop-agent-0.2.3-x64.pkg.tar.xz
+sudo pacman -U release/desktop-agent-0.2.3-x64.pkg.tar.xz
 ```
 
 目前只在 Arch 系上使用，所以默认只打 pacman 包。其它目标按需点名（能力保留，但只在 pacman 上验证过）：
 
 ```bash
-just package appimage deb     # desktop-agent-0.2.1-x86_64.AppImage、desktop-agent-0.2.1-amd64.deb
+just package appimage deb     # desktop-agent-0.2.3-x86_64.AppImage、desktop-agent-0.2.3-amd64.deb
 just package pacman appimage  # 可以混着点
 ```
 
@@ -128,6 +128,7 @@ qdbus6 org.kde.KWin /KWin reconfigure
 | `compactWidth` / `compactHeight` | 悬浮窗尺寸，默认 720×132 |
 | `fullWidth` / `fullHeight` | 完整窗口尺寸，默认 1080×720；最大化时的还原尺寸 |
 | `fullMaximized` | 对话窗口是否最大化。点过标题栏的最大化按钮就会记住：切到悬浮窗再回来、下次启动都照此恢复 |
+| `lastModel` | 上个会话使用的模型（provider + id）。切换模型时自动写入，新建会话时沿用；不需要手改 |
 
 工作目录、`persistSession`、`extensions` 是 Agent 子进程的启动参数，改动后子进程会重启（换工作目录后 Agent 在新目录下新建会话）。工作目录可以在设置里直接改，也可以点「浏览…」用系统的目录选择框。
 
@@ -152,6 +153,8 @@ qdbus6 org.kde.KWin /KWin reconfigure
 输入框里键入 `/` 会弹出斜杠命令联想（扩展命令、prompt 模板、skill，与 pi 终端界面里的同源）：↑↓ 选择，Tab 或回车补全命令名，Esc 关闭。补全只改输入框内容，回车提交后仍由 pi 自己识别并执行命令。悬浮窗里列表弹出时窗口会临时加高。
 
 对话窗口右上角有最大化按钮。它记的是你的选择而不只是当前状态：用快捷键收起、再从悬浮窗切回来，或者下次启动，都会恢复成最大化。
+
+点标题栏的模型名可以切换模型：列表只列出当前有可用凭据的模型，按 provider 分组、可搜索，打开时高亮当前模型。切换会记住——**新建会话沿用上个会话使用的模型**，重启应用后也是；该模型不可用时回落到默认。不改 pi 的全局默认模型，所以不影响终端里的 pi。
 
 细节见 [docs/architecture.md](docs/architecture.md)。为什么从 Tauri 换到 Electron 见 [docs/decisions/0001-electron.md](docs/decisions/0001-electron.md)，为什么用 Bun 见 [docs/decisions/0002-bun.md](docs/decisions/0002-bun.md)。
 

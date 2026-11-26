@@ -79,6 +79,8 @@ export const agentClient = {
   sessions: () => call("agent_sessions"),
   /** 斜杠命令联想用的命令列表（扩展命令 / prompt 模板 / skill）。 */
   commands: () => call("agent_commands"),
+  /** 切换模型用的可选列表（当前有可用凭据的模型）。 */
+  models: () => call("agent_models"),
 };
 
 export const windowClient = {

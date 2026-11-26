@@ -8,13 +8,15 @@
  */
 import fs from "node:fs";
 import type * as Pi from "@earendil-works/pi-coding-agent";
-import type { AgentSession, CreateAgentSessionRuntimeFactory } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionRuntime, CreateAgentSessionRuntimeFactory } from "@earendil-works/pi-coding-agent";
 import type {
   AgentEvent,
   AgentEventBody,
   ChatMessage,
   ExtensionUiRequestBody,
   ExtensionUiResponse,
+  ModelInfo,
+  ModelRef,
   PromptOutcome,
   SessionState,
   SessionStats,
@@ -52,6 +54,8 @@ export class AgentHost {
   }
 
   private readonly pendingDialogs = new Map<string, PendingDialog>();
+  /** 上个会话使用的模型：新建会话时沿用。启动时取自配置，之后跟随用户的操作。 */
+  private lastModel: ModelRef | null = null;
   private dialogSeq = 0;
   private runtime!: InstanceType<typeof Pi.AgentSessionRuntime>;
   private session!: AgentSession;
@@ -98,6 +102,9 @@ export class AgentHost {
     this.runtime = await pi.createAgentSessionRuntime(createRuntime, { cwd, agentDir, sessionManager });
     this.runtime.setRebindSession(() => this.rebind());
     await this.rebind();
+    // 启动时的会话沿用上个会话使用的模型；没记过（或已不可用）就是 pi 的默认模型。
+    await this.applyLastModel(this.options.lastModel);
+    this.lastModel = refOf(this.session.model);
   }
 
   /** 会话被替换（新建 / 切换）后调用：旧订阅全部作废。 */
@@ -117,7 +124,7 @@ export class AgentHost {
       mode: "rpc",
       commandContextActions: {
         waitForIdle: () => this.session.waitForIdle(),
-        newSession: (opts) => this.runtime.newSession(opts),
+        newSession: (opts) => this.newSession(opts),
         fork: async (entryId, forkOptions) => {
           const result = await this.runtime.fork(entryId, forkOptions);
           return { cancelled: result.cancelled };
@@ -152,19 +159,23 @@ export class AgentHost {
         await this.session.abort();
         return null;
       case "newSession": {
-        const result = await this.runtime.newSession();
+        const result = await this.newSession();
         if (result.cancelled) throw new Error("新会话被扩展取消");
         return null;
       }
       case "switchSession": {
         const result = await this.runtime.switchSession(req.sessionPath);
         if (result.cancelled) throw new Error("切换会话被扩展取消");
+        // 切到的会话自带模型，不覆盖；它成为之后新建会话时沿用的「上个会话使用的模型」。
+        this.lastModel = refOf(this.session.model);
         return null;
       }
       case "sessions":
         return this.sessions();
       case "commands":
         return this.commands();
+      case "models":
+        return this.models();
       case "stats":
         return this.stats();
       case "setModel": {
@@ -173,6 +184,7 @@ export class AgentHost {
           throw new Error(`找不到模型 ${req.provider}/${req.modelId}，请确认 pi 里已配置该 provider`);
         }
         await this.session.setModel(model);
+        this.lastModel = { provider: req.provider, id: req.modelId };
         return null;
       }
       case "setThinkingLevel":
@@ -236,6 +248,12 @@ export class AgentHost {
       .sort((a, b) => b.modifiedMs - a.modifiedMs);
   }
 
+  /** 当前有可用凭据的模型，切换模型的下拉列表用。 */
+  private async models(): Promise<ModelInfo[]> {
+    const available = await this.session.modelRuntime.getAvailable();
+    return available.map((model) => toModelInfo(model)).filter((m): m is ModelInfo => m !== null);
+  }
+
   /** 与 pi 自带 RPC 模式的 get_commands 同源：扩展命令、prompt 模板、skill（名字带 skill: 前缀）。 */
   private commands(): SlashCommand[] {
     const s = this.session;
@@ -280,6 +298,31 @@ export class AgentHost {
         percent: s.contextUsage.percent,
       },
     };
+  }
+
+  /** 新建会话（界面、托盘、扩展都走这里）：新会话沿用上个会话使用的模型。 */
+  private async newSession(opts?: Parameters<AgentSessionRuntime["newSession"]>[0]) {
+    const wanted = this.lastModel;
+    const result = await this.runtime.newSession(opts);
+    if (!result.cancelled) await this.applyLastModel(wanted);
+    this.lastModel = refOf(this.session.model);
+    return result;
+  }
+
+  /** 新会话沿用指定模型；它已不可用（凭据没了、下线了）就保持默认，不打断。 */
+  private async applyLastModel(wanted: ModelRef | null): Promise<void> {
+    const s = this.session;
+    if (!wanted || (s.model?.provider === wanted.provider && s.model?.id === wanted.id)) return;
+    const model = s.modelRuntime.getModel(wanted.provider, wanted.id);
+    if (!model) {
+      this.log("warn", `上个会话的模型 ${wanted.provider}/${wanted.id} 已不可用，新会话用默认模型`);
+      return;
+    }
+    try {
+      await s.setModel(model);
+    } catch (err) {
+      this.log("warn", `上个会话的模型 ${wanted.provider}/${wanted.id} 用不了，新会话用默认模型：${errorMessage(err)}`);
+    }
   }
 
   // ---- 扩展 UI ----------------------------------------------------------
@@ -405,6 +448,10 @@ function fileSize(path: string): number {
   } catch {
     return 0;
   }
+}
+
+function refOf(model: { provider: string; id: string } | undefined): ModelRef | null {
+  return model ? { provider: model.provider, id: model.id } : null;
 }
 
 export function errorMessage(err: unknown): string {

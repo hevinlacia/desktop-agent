@@ -10,6 +10,7 @@ import path from "node:path";
 import type {
   AgentEvent,
   ExtensionUiResponse,
+  ModelInfo,
   PromptOutcome,
   SessionState,
   SessionStats,
@@ -229,6 +230,11 @@ export class AgentProcess {
   /** 斜杠命令联想用的命令列表。 */
   commands() {
     return this.send<SlashCommand[]>((id) => ({ id, cmd: "commands" }));
+  }
+
+  /** 切换模型用的可选列表。 */
+  models() {
+    return this.send<ModelInfo[]>((id) => ({ id, cmd: "models" }));
   }
 
   stats() {

@@ -317,9 +317,24 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         }));
         break;
 
-      case "extensionUi":
-        set({ extensionUi: event.request });
+      case "extensionUi": {
+        // 待决对话框（select/confirm/input/editor）不能被 notify 事件覆盖：
+        // 槽位被换成 notify 后对话框渲染为 null，宿主侧 pending promise 永不结算
+        // （ask 无 timeout 时无限等），agent 表现为永久卡死。notify 改走消息流。
+        const pending = get().extensionUi;
+        const incoming = event.request;
+        if (pending && pending.kind !== "notify" && incoming.kind === "notify") {
+          set((s) => ({
+            messages: [
+              ...s.messages,
+              notice(incoming.message, incoming.level === "error" ? "error" : "info"),
+            ],
+          }));
+          break;
+        }
+        set({ extensionUi: incoming });
         break;
+      }
 
       case "error":
         set((s) => ({
@@ -413,10 +428,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
           await agentClient.respondExtensionUi({ kind: "confirm", id: req.id, confirmed });
           break;
         case "select":
+          // 空串不是有效作答（点选选项才有值）；兜底到第一个选项，避免扩展拿到 "" 后静默退出。
           await agentClient.respondExtensionUi({
             kind: "select",
             id: req.id,
-            value: value ?? req.options[0] ?? "",
+            value: value || req.options[0] || "",
           });
           break;
         case "input":

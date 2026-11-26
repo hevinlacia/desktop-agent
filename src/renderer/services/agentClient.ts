@@ -59,6 +59,11 @@ export function onModeChanged(handler: (mode: WindowMode) => void): () => void {
   return listen("window://mode-changed", handler);
 }
 
+/** 订阅对话窗口的最大化状态变化（按钮、窗口管理器快捷键都会触发）。 */
+export function onMaximizedChanged(handler: (maximized: boolean) => void): () => void {
+  return listen("window://maximized-changed", handler);
+}
+
 export const agentClient = {
   state: () => call("agent_state"),
   send: (text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<PromptOutcome> =>
@@ -72,6 +77,8 @@ export const agentClient = {
   respondExtensionUi: (response: ExtensionUiResponse) =>
     call("agent_extension_ui_response", { response }),
   sessions: () => call("agent_sessions"),
+  /** 斜杠命令联想用的命令列表（扩展命令 / prompt 模板 / skill）。 */
+  commands: () => call("agent_commands"),
 };
 
 export const windowClient = {
@@ -79,6 +86,9 @@ export const windowClient = {
   switchMode: (mode: WindowMode) => call("window_switch_mode", { mode }),
   /** 宿主侧的真实形态。启动时必须取一次：初始形态在页面加载前就已定好。 */
   mode: () => call("window_mode"),
+  /** 对话窗口的最大化状态；切到对话窗口后要重新取一次（宿主会按记住的偏好恢复）。 */
+  isMaximized: () => call("window_is_maximized"),
+  toggleMaximize: () => call("window_toggle_maximize"),
   /** 临时调整窗口尺寸（悬浮窗展开会话列表时加高）；省略的轴保持不变。 */
   resize: (size: { width?: number; height?: number }) =>
     call("window_resize", { width: size.width ?? null, height: size.height ?? null }),
@@ -87,6 +97,8 @@ export const windowClient = {
 export const configClient = {
   get: () => call("config_get"),
   set: (config: AppConfig) => call("config_set", { config }),
+  /** 弹出系统的目录选择框；用户取消时返回 null。 */
+  pickDirectory: (defaultPath: string) => call("dialog_pick_directory", { defaultPath }),
 };
 
 export type { SessionSummary };

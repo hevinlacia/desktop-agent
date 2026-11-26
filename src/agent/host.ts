@@ -19,6 +19,7 @@ import type {
   SessionState,
   SessionStats,
   SessionSummary,
+  SlashCommand,
 } from "@shared/protocol";
 import type { AgentInitOptions, AgentRequest, LogLevel } from "@shared/agentIpc";
 import { mapSessionEvent, toChatMessage, toModelInfo, toSessionSummary } from "./mapping";
@@ -162,6 +163,8 @@ export class AgentHost {
       }
       case "sessions":
         return this.sessions();
+      case "commands":
+        return this.commands();
       case "stats":
         return this.stats();
       case "setModel": {
@@ -231,6 +234,29 @@ export class AgentHost {
     return list
       .map((info) => toSessionSummary(info, fileSize(info.path)))
       .sort((a, b) => b.modifiedMs - a.modifiedMs);
+  }
+
+  /** 与 pi 自带 RPC 模式的 get_commands 同源：扩展命令、prompt 模板、skill（名字带 skill: 前缀）。 */
+  private commands(): SlashCommand[] {
+    const s = this.session;
+    return [
+      ...s.extensionRunner.getRegisteredCommands().map((command) => ({
+        name: command.invocationName,
+        description: command.description ?? "",
+        source: "extension" as const,
+      })),
+      ...s.promptTemplates.map((template) => ({
+        name: template.name,
+        description: template.description,
+        source: "prompt" as const,
+        ...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
+      })),
+      ...s.resourceLoader.getSkills().skills.map((skill) => ({
+        name: `skill:${skill.name}`,
+        description: skill.description,
+        source: "skill" as const,
+      })),
+    ];
   }
 
   private stats(): SessionStats {

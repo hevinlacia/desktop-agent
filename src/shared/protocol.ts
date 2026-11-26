@@ -138,6 +138,19 @@ export interface SessionSummary {
 /** `agent_send` 的受理结果：立即开跑 / 排队（steer、followUp）/ 被扩展命令直接处理。 */
 export type PromptOutcome = "started" | "queued" | "handled";
 
+/**
+ * 斜杠命令联想的一项，与 pi 自带 RPC 模式的 get_commands 同源：
+ * 扩展注册的命令、prompt 模板、skill（名字带 `skill:` 前缀）。
+ * 联想只负责把命令名补进输入框；回车提交仍走普通 prompt()，由 pi 自己识别并执行 / 展开。
+ */
+export interface SlashCommand {
+  name: string;
+  description: string;
+  source: "extension" | "prompt" | "skill";
+  /** 参数提示，例如 `<provider:model>`；没有就不带。 */
+  argumentHint?: string;
+}
+
 /** 托盘/快捷键能触发的窗口形态。 */
 export type WindowMode = "compact" | "full";
 
@@ -156,4 +169,6 @@ export interface AppConfig {
   /** 完整窗口尺寸。 */
   fullWidth: number;
   fullHeight: number;
+  /** 对话窗口是否最大化。记住用户的选择：切到悬浮窗再回来、下次启动都照此恢复。 */
+  fullMaximized: boolean;
 }

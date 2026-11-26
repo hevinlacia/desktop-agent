@@ -7,7 +7,7 @@ import {
   Search,
   Settings2,
 } from "lucide-react";
-import { agentClient, type SessionSummary } from "@/services/agentClient";
+import { agentClient, configClient, type SessionSummary } from "@/services/agentClient";
 import { useAgentStore } from "@/stores/useAgentStore";
 import { cn, formatTokens } from "@/lib/utils";
 import type { WindowMode } from "@shared/protocol";
@@ -318,6 +318,17 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   const levels = ["off", "low", "medium", "high"];
 
+  /** 用系统的目录选择框挑工作目录；取消就不动。 */
+  const browse = async () => {
+    if (!draft) return;
+    try {
+      const picked = await configClient.pickDirectory(draft.cwd);
+      if (picked) setDraft({ ...draft, cwd: picked });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div
       data-modal-open
@@ -365,11 +376,33 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
           </div>
         </Group>
 
-        <Group label="工作目录">
-          <div className="selectable break-all text-[10px] leading-snug text-ink-muted">
-            {cwd || "—"}
-          </div>
-        </Group>
+        {draft ? (
+          <Group label="工作目录">
+            <div className="flex gap-1">
+              <input
+                value={draft.cwd}
+                onChange={(e) => setDraft({ ...draft, cwd: e.target.value })}
+                placeholder="~"
+                spellCheck={false}
+                className="min-w-0 flex-1 rounded border border-border-subtle bg-surface px-1.5 py-1 font-mono text-[10.5px] outline-none focus:border-accent/50"
+              />
+              <button
+                type="button"
+                onClick={() => void browse()}
+                className="shrink-0 rounded border border-border-subtle bg-surface px-1.5 text-[10.5px] text-ink-muted transition hover:bg-surface-sunken hover:text-ink"
+              >
+                浏览…
+              </button>
+            </div>
+            <div className="mt-1 text-[10px] leading-snug text-ink-muted/60">
+              Agent 的工具在这个目录下运行，会话也按它归组。保存后 Agent 会重启并新建会话。
+            </div>
+          </Group>
+        ) : (
+          <Group label="工作目录">
+            <div className="selectable break-all text-[10px] leading-snug text-ink-muted">{cwd || "—"}</div>
+          </Group>
+        )}
 
         {draft && (
           <>

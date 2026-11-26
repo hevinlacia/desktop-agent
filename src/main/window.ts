@@ -6,11 +6,11 @@
  */
 import { app, BrowserWindow, screen, shell } from "electron";
 import path from "node:path";
-import { getConfig } from "./config";
+import { getConfig, saveConfig } from "./config";
 import { isWebUrl } from "./externalUrl";
 import { MIN_WINDOW, resolveSize } from "../shared/config";
-import { WINDOW_MODE_CHANNEL } from "../shared/bridge";
-import type { WindowMode } from "../shared/protocol";
+import { WINDOW_MAXIMIZED_CHANNEL, WINDOW_MODE_CHANNEL } from "../shared/bridge";
+import type { AppConfig, WindowMode } from "../shared/protocol";
 
 let win: BrowserWindow | null = null;
 let mode: WindowMode = "compact";
@@ -79,6 +79,11 @@ export function createMainWindow(): BrowserWindow {
     }
   });
 
+  // 用户也可能用窗口管理器的快捷键最大化 / 还原，所以以窗口的真实状态为准，并记住这个偏好：
+  // 切到悬浮窗再回来、下次启动，都恢复成用户最后的选择。
+  win.on("maximize", syncMaximized);
+  win.on("unmaximize", syncMaximized);
+
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl) {
     void win.loadURL(devUrl);
@@ -96,14 +101,76 @@ export function createMainWindow(): BrowserWindow {
 }
 
 function applyMode(target: WindowMode): void {
-  if (!win) return;
+  const w = live();
+  if (!w) return;
   const cfg = getConfig();
   const full = target === "full";
-  win.setSize(full ? cfg.fullWidth : cfg.compactWidth, full ? cfg.fullHeight : cfg.compactHeight, true);
-  // Wayland 不允许客户端置顶，这一项在 KDE 上不生效。需要的话用窗口规则「保持在最前」。
-  win.setAlwaysOnTop(!full, "floating");
-  win.setSkipTaskbar(!full);
+  // 先改形态再动窗口：还原最大化会触发 unmaximize 事件，处理它的代码要靠它知道已经不在对话窗口形态，
+  // 否则切形态时的那一次还原会把「最大化偏好」冲掉。
   mode = target;
+  if (!full && w.isMaximized()) {
+    // 悬浮窗是一个小条：最大化状态下 setSize 不生效，先还原。偏好已记住，回完整形态时会再最大化。
+    w.unmaximize();
+    // 还原是合成器异步完成的（Wayland 上尤其明显），它完成时会把窗口恢复成最大化之前的尺寸，
+    // 盖掉下面设的值；而「还原完成」的通知可能早于尺寸落地。所以分几次补设，直到尺寸对上。
+    settleCompactSize(w, cfg, 100, 4);
+  }
+  w.setSize(full ? cfg.fullWidth : cfg.compactWidth, full ? cfg.fullHeight : cfg.compactHeight, true);
+  // Wayland 不允许客户端置顶，这一项在 KDE 上不生效。需要的话用窗口规则「保持在最前」。
+  w.setAlwaysOnTop(!full, "floating");
+  w.setSkipTaskbar(!full);
+}
+
+/** 按记住的偏好最大化对话窗口。 */
+function restoreMaximize(): void {
+  const w = live();
+  if (w && getConfig().fullMaximized && !w.isMaximized()) w.maximize();
+}
+
+/**
+ * 从最大化切到悬浮窗后核对尺寸，不对就补设。间隔逐次加倍（100、200、400、800ms），
+ * 合成器慢一点也兜得住，总共也只有几次。
+ * 形态已经不是悬浮窗、或窗口又最大化了，就停手，别把用户后来的操作盖掉。
+ */
+function settleCompactSize(w: BrowserWindow, cfg: AppConfig, delayMs: number, attempts: number): void {
+  setTimeout(() => {
+    if (w.isDestroyed() || mode !== "compact" || w.isMaximized()) return;
+    const [width, height] = w.getSize();
+    if (width !== cfg.compactWidth || height !== cfg.compactHeight) {
+      w.setSize(cfg.compactWidth, cfg.compactHeight, false);
+    }
+    if (attempts > 1) settleCompactSize(w, cfg, delayMs * 2, attempts - 1);
+  }, delayMs);
+}
+
+/** 把窗口的真实最大化状态记进配置（只在对话窗口形态下算数）并通知渲染进程。 */
+function syncMaximized(): void {
+  const w = live();
+  if (!w) return;
+  const maximized = w.isMaximized();
+  // 悬浮窗永远不最大化，不算数：不然切形态时那一次还原会把偏好冲掉。
+  if (mode === "full" && getConfig().fullMaximized !== maximized) {
+    try {
+      saveConfig({ ...getConfig(), fullMaximized: maximized });
+    } catch (err) {
+      // 写不进去只影响下次启动的样子，不值得打断用户。
+      console.error("保存窗口最大化偏好失败：", err);
+    }
+  }
+  w.webContents.send(WINDOW_MAXIMIZED_CHANNEL, maximized);
+}
+
+export function isMaximized(): boolean {
+  const w = live();
+  return !!w && w.isMaximized();
+}
+
+/** 最大化 / 还原对话窗口。 */
+export function toggleMaximize(): void {
+  const w = live();
+  if (!w) return;
+  if (w.isMaximized()) w.unmaximize();
+  else w.maximize();
 }
 
 /** 显示并聚焦到指定形态。 */
@@ -113,6 +180,7 @@ export function showWindow(target: WindowMode): void {
   if (target === "compact") placeCompact();
   win.show();
   win.focus();
+  if (target === "full") restoreMaximize();
   broadcastMode();
 }
 
@@ -139,6 +207,7 @@ export function switchMode(target: WindowMode): void {
   const w = live();
   if (!w) return;
   applyMode(target);
+  if (target === "full") restoreMaximize();
   broadcastMode();
 }
 

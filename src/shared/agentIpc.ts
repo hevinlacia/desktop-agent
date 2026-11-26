@@ -5,6 +5,7 @@ import type {
   SessionState,
   SessionStats,
   SessionSummary,
+  SlashCommand,
 } from "./protocol";
 
 /**
@@ -29,6 +30,7 @@ export type AgentRequest =
   | { id: number; cmd: "newSession" }
   | { id: number; cmd: "switchSession"; sessionPath: string }
   | { id: number; cmd: "sessions" }
+  | { id: number; cmd: "commands" }
   | { id: number; cmd: "stats" }
   | { id: number; cmd: "setModel"; provider: string; modelId: string }
   | { id: number; cmd: "setThinkingLevel"; level: string }
@@ -44,6 +46,7 @@ export interface AgentReplies {
   newSession: null;
   switchSession: null;
   sessions: SessionSummary[];
+  commands: SlashCommand[];
   stats: SessionStats;
   setModel: null;
   setThinkingLevel: null;

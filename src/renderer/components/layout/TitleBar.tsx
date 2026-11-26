@@ -1,7 +1,12 @@
-import { MessageSquarePlus, MoreHorizontal, PanelTop, X } from "lucide-react";
+import { Copy, MessageSquarePlus, MoreHorizontal, PanelTop, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAgentStore } from "@/stores/useAgentStore";
-import { windowClient, type SessionSummary, agentClient } from "@/services/agentClient";
+import {
+  agentClient,
+  onMaximizedChanged,
+  windowClient,
+  type SessionSummary,
+} from "@/services/agentClient";
 import { cn, formatTokens } from "@/lib/utils";
 import type { WindowMode } from "@shared/protocol";
 
@@ -17,6 +22,14 @@ export function TitleBar({ mode }: { mode: WindowMode }) {
   const newSession = useAgentStore((s) => s.newSession);
 
   const pct = stats?.contextUsage?.percent ?? null;
+  const [maximized, setMaximized] = useState(false);
+
+  // 最大化状态以宿主为准（按钮和窗口管理器都能改）。切到对话窗口后宿主会按记住的偏好恢复，所以形态变了要重取。
+  useEffect(() => {
+    const off = onMaximizedChanged(setMaximized);
+    void windowClient.isMaximized().then(setMaximized).catch(() => undefined);
+    return off;
+  }, [mode]);
 
   return (
     <div
@@ -57,6 +70,14 @@ export function TitleBar({ mode }: { mode: WindowMode }) {
           <MessageSquarePlus size={12} />
         </BarButton>
         <SessionMenu />
+        {mode === "full" && (
+          <BarButton
+            label={maximized ? "还原" : "最大化"}
+            onClick={() => void windowClient.toggleMaximize()}
+          >
+            {maximized ? <Copy size={11} /> : <Square size={11} />}
+          </BarButton>
+        )}
         <BarButton
           label={mode === "compact" ? "展开" : "收起为悬浮窗"}
           onClick={() => void setMode(mode === "compact" ? "full" : "compact")}

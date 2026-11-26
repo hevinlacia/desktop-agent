@@ -25,6 +25,13 @@ describe("resolveConfig", () => {
     expect(cfg).toEqual(defaultConfig(HOME));
   });
 
+  it("工作目录开头的 ~ 展开为家目录，其余路径原样保留", () => {
+    expect(resolveConfig({ cwd: "~" }, HOME).cwd).toBe(HOME);
+    expect(resolveConfig({ cwd: "~/Developer/tools" }, HOME).cwd).toBe(`${HOME}/Developer/tools`);
+    expect(resolveConfig({ cwd: "/tmp/a~b" }, HOME).cwd).toBe("/tmp/a~b");
+    expect(resolveConfig({ cwd: "~other/x" }, HOME).cwd).toBe("~other/x");
+  });
+
   it("尺寸低于下限时回退", () => {
     const cfg = resolveConfig({ compactHeight: 10, fullHeight: 50 }, HOME);
     expect(cfg.compactHeight).toBe(defaultConfig(HOME).compactHeight);

@@ -16,6 +16,7 @@ export function defaultConfig(homeDir: string): AppConfig {
     compactHeight: 132,
     fullWidth: 1080,
     fullHeight: 720,
+    fullMaximized: false,
   };
 }
 
@@ -27,7 +28,7 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
   const d = defaultConfig(homeDir);
   if (!isRecord(raw)) return d;
   return {
-    cwd: text(raw.cwd) ?? d.cwd,
+    cwd: expandHome(text(raw.cwd) ?? d.cwd, homeDir),
     persistSession: bool(raw.persistSession, d.persistSession),
     extensions: bool(raw.extensions, d.extensions),
     toggleShortcut: text(raw.toggleShortcut) ?? d.toggleShortcut,
@@ -35,7 +36,14 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
     compactHeight: num(raw.compactHeight, d.compactHeight, MIN_WINDOW.height),
     fullWidth: num(raw.fullWidth, d.fullWidth, MIN_WINDOW.width),
     fullHeight: num(raw.fullHeight, d.fullHeight, MIN_FULL_HEIGHT),
+    fullMaximized: bool(raw.fullMaximized, d.fullMaximized),
   };
+}
+
+/** 把开头的 `~` 展开成家目录，其余原样返回。用户在设置里手输 `~/x` 时用得上。 */
+function expandHome(dir: string, homeDir: string): string {
+  if (dir === "~") return homeDir;
+  return dir.startsWith("~/") ? homeDir + dir.slice(1) : dir;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

@@ -1,7 +1,7 @@
 {
   "name": "desktop-agent",
   "productName": "Desktop Agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "个人桌面 AI Agent 客户端：Electron + React，Agent 能力由 pi SDK 子进程提供",
   "private": true,
   "homepage": "https://github.com/hevinlacia/desktop-agent",

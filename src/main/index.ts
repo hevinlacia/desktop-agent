@@ -2,8 +2,11 @@
  * 主进程入口：装配窗口、托盘、快捷键、IPC 与 Agent 子进程。
  * 这里只做启动与编排，各能力的实现都在同目录的单个模块里。
  */
-import { app, type Tray } from "electron";
+import { app, dialog, type Tray } from "electron";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { AgentProcess } from "./agentProcess";
 import { getConfig, loadConfig, saveConfig } from "./config";
 import { legacyKWinWarning } from "./legacy";
@@ -15,12 +18,14 @@ import {
   createMainWindow,
   currentMode,
   hideWindow,
+  isMaximized,
   mainWindow,
   markQuitting,
   reapplyMode,
   resizeWindow,
   showWindow,
   switchMode,
+  toggleMaximize,
   toggleWindow,
 } from "./window";
 import { AGENT_BOOT_ERROR_CHANNEL, AGENT_EVENT_CHANNEL, AGENT_RESET_CHANNEL, EXTERNAL_ASK_CHANNEL } from "../shared/bridge";
@@ -36,6 +41,18 @@ let lastAgentStatus: AgentStatus | null = null;
 // 配置固定放在 appData/desktop-agent（Linux: ~/.config/desktop-agent），单实例锁也在这个目录。
 app.setName("desktop-agent");
 
+// 自检与正式版互不干扰：自检用独立的 userData（单实例锁和配置都按它算）。
+// 不然用户正开着应用时，自检实例拿不到锁会静默退出，还会把用户的窗口弹到前台。
+// 自检里拉起的第二个实例只继承 DESKTOP_AGENT_USERDATA、不继承自检开关：它只负责转交参数，
+// 绝不能自己也变成一个跑自检的完整实例（否则会一环扣一环地互相拉起）。
+const selfTestDir = process.env.DESKTOP_AGENT_SELFTEST
+  ? path.resolve(process.env.DESKTOP_AGENT_SELFTEST)
+  : null;
+const userDataOverride = selfTestDir
+  ? path.join(selfTestDir, "userData")
+  : process.env.DESKTOP_AGENT_USERDATA || null;
+if (userDataOverride) app.setPath("userData", userDataOverride);
+
 if (!app.requestSingleInstanceLock()) {
   // 已有实例在跑：它那边会收到 second-instance 并把窗口带到前台，这里直接退出。
   app.quit();
@@ -48,6 +65,39 @@ if (!app.requestSingleInstanceLock()) {
       console.error("启动失败：", err);
       app.quit();
     });
+}
+
+/** 系统的目录选择框。用户取消时返回 null。 */
+async function pickDirectory(defaultPath: string | null): Promise<string | null> {
+  const options: Electron.OpenDialogOptions = {
+    title: "选择 Agent 的工作目录",
+    properties: ["openDirectory", "createDirectory"],
+    ...(defaultPath && isDirectory(defaultPath) ? { defaultPath } : {}),
+  };
+  const win = mainWindow();
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? null : (result.filePaths[0] ?? null);
+}
+
+function isDirectory(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 退出后删除自检用的 userData。只认「某个目录/userData」这一种形状，路径不是这样就不删——
+ * 它来自环境变量，不能因为一个奇怪的取值删错东西。
+ */
+function scheduleUserDataCleanup(dir: string): void {
+  const parent = path.dirname(dir);
+  if (path.basename(dir) !== "userData" || parent === path.parse(dir).root || parent === os.homedir()) return;
+  spawn("sh", ["-c", 'sleep 2; rm -rf -- "$1"', "desktop-agent-cleanup", dir], {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
 }
 
 function wireAppEvents(): void {
@@ -138,10 +188,21 @@ async function boot(): Promise<void> {
   const selfTestDir = process.env.DESKTOP_AGENT_SELFTEST;
   if (selfTestDir) {
     const code = await runSelfTest(
-      { win, agent, agentStatus: () => lastAgentStatus, switchMode },
+      {
+        win,
+        agent,
+        agentStatus: () => lastAgentStatus,
+        switchMode,
+        applyConfig,
+        getConfig,
+        toggleMaximize,
+        isMaximized,
+      },
       selfTestDir,
     );
     markQuitting();
+    // Chromium 在退出过程中还会往 userData 里写几个收尾文件，当场删不干净：起一个脱离进程的延时清理。
+    scheduleUserDataCleanup(app.getPath("userData"));
     app.exit(code);
   }
 }
@@ -158,12 +219,16 @@ function createHandlers(): CommandHandlers {
     agent_set_thinking_level: ({ level }) => agent.setThinkingLevel(level),
     agent_extension_ui_response: ({ response }) => agent.respondExtensionUi(response),
     agent_sessions: () => agent.sessions(),
+    agent_commands: () => agent.commands(),
     window_hide: () => hideWindow(),
     window_switch_mode: ({ mode }) => switchMode(mode),
     window_mode: () => currentMode(),
+    window_toggle_maximize: () => toggleMaximize(),
+    window_is_maximized: () => isMaximized(),
     window_resize: ({ width, height }) => resizeWindow({ width, height }),
     config_get: () => getConfig(),
     config_set: ({ config }) => applyConfig(config),
+    dialog_pick_directory: ({ defaultPath }) => pickDirectory(defaultPath),
   };
 }
 

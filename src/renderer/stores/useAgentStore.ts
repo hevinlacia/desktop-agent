@@ -66,6 +66,8 @@ interface AgentStore {
   mode: WindowMode;
   /** 悬浮窗里的会话侧边栏是否展开。不持久化：每次进入悬浮窗形态都从收起开始。 */
   compactSidebarOpen: boolean;
+  /** 悬浮窗里斜杠命令联想列表需要的高度（逻辑像素），0 = 没有弹出。弹出时窗口临时加高。 */
+  compactCommandPopupHeight: number;
   bootError: string | null;
   config: AppConfig | null;
   ready: boolean;
@@ -82,6 +84,7 @@ interface AgentStore {
   /** 宿主改了窗口形态：只同步状态，不回写宿主。 */
   applyHostMode: (mode: WindowMode) => void;
   setCompactSidebarOpen: (open: boolean) => Promise<void>;
+  setCompactCommandPopupHeight: (height: number) => Promise<void>;
   respondUi: (confirmed: boolean, value?: string) => Promise<void>;
   dismissUi: () => void;
   setBootError: (msg: string | null) => void;
@@ -132,6 +135,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   extensionUi: null,
   mode: "compact",
   compactSidebarOpen: false,
+  compactCommandPopupHeight: 0,
   bootError: null,
   config: null,
   ready: false,
@@ -389,11 +393,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   async setCompactSidebarOpen(open) {
     set({ compactSidebarOpen: open });
-    // 悬浮窗只有 132px 高，展开列表必须把窗口加高；收起时恢复配置高度。
-    const base = get().config?.compactHeight;
-    if (!base) return;
-    const height = open ? Math.max(base, COMPACT_SIDEBAR_WINDOW_HEIGHT) : base;
-    await windowClient.resize({ height }).catch(() => undefined);
+    await resizeCompactWindow(get());
+  },
+
+  async setCompactCommandPopupHeight(height) {
+    const next = Math.max(0, Math.round(height));
+    if (get().compactCommandPopupHeight === next) return;
+    set({ compactCommandPopupHeight: next });
+    await resizeCompactWindow(get());
   },
 
   async respondUi(confirmed, value) {
@@ -459,6 +466,20 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set({ thinkingLevel: level });
   },
 }));
+
+/**
+ * 悬浮窗只有 132px 高，叠在它上面的列表（会话侧边栏、斜杠命令联想）都需要把窗口临时加高。
+ * 取两者各自所需高度的较大值；都不需要时恢复配置高度。
+ */
+async function resizeCompactWindow(state: AgentStore): Promise<void> {
+  const base = state.config?.compactHeight;
+  if (!base) return;
+  const wanted = Math.max(
+    state.compactSidebarOpen ? COMPACT_SIDEBAR_WINDOW_HEIGHT : base,
+    base + state.compactCommandPopupHeight,
+  );
+  await windowClient.resize({ height: wanted }).catch(() => undefined);
+}
 
 /** 进入某形态时的状态变更。切到悬浮窗必须收起侧边栏：宿主会按 config 复位窗口高度。 */
 function enterMode(mode: WindowMode): Partial<AgentStore> {

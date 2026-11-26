@@ -14,6 +14,7 @@ import type {
   SessionState,
   SessionStats,
   SessionSummary,
+  SlashCommand,
 } from "../shared/protocol";
 import type { AgentInitOptions, AgentRequest, AgentStatus, AgentToMain, LogLevel } from "../shared/agentIpc";
 
@@ -223,6 +224,11 @@ export class AgentProcess {
 
   sessions() {
     return this.send<SessionSummary[]>((id) => ({ id, cmd: "sessions" }));
+  }
+
+  /** 斜杠命令联想用的命令列表。 */
+  commands() {
+    return this.send<SlashCommand[]>((id) => ({ id, cmd: "commands" }));
   }
 
   stats() {

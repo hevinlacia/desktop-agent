@@ -4,18 +4,20 @@
  * 用法：设置环境变量 DESKTOP_AGENT_SELFTEST=<输出目录> 后启动应用。
  * 流程：等 Agent 就绪 → 完整形态下取布局快照与窗口截图 → 宿主切到悬浮窗 → 再取一次
  * → 回到完整形态，走界面路径真实提问一轮 → 经 `desktop-agent ask` 从外部再提问一轮
- * → 点一个链接，确认只交给系统浏览器 → 写 result.json 后退出。
+ * → 点一个链接，确认只交给系统浏览器 → 输入 / 验证斜杠命令联想
+ * → 改一次工作目录再改回 → 最大化 / 切形态 / 还原 → 写 result.json 后退出。
  * 退出码：0 通过；1 断言失败；2 超时。
  *
  * 自检模式下会话不落盘（见 index.ts 的 agentOptions），测试提问不会出现在 pi 的会话列表里。
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { app, shell, type BrowserWindow, type NativeImage } from "electron";
 import type { AgentProcess } from "./agentProcess";
 import type { AgentStatus } from "../shared/agentIpc";
-import type { AgentEvent, ChatMessage } from "../shared/protocol";
+import type { AgentEvent, AppConfig, ChatMessage } from "../shared/protocol";
 
 const FULL_SIDEBAR_WIDTH = 224;
 const COMPACT_SIDEBAR_WIDTH = 40;
@@ -39,6 +41,11 @@ interface LayoutProbe {
   lastAssistantText: string;
   /** 渲染进程自认为可见还是隐藏。 */
   visibility: string;
+  /** 输入框当前内容与联想列表的行数（0 = 没有弹出）。 */
+  inputValue: string;
+  commandSuggestions: number;
+  /** 标题栏上是否出现了「还原」按钮（即窗口处于最大化）。 */
+  restoreButton: boolean;
   title: string;
 }
 
@@ -48,6 +55,11 @@ export interface SelfTestContext {
   /** 最近一次 Agent 状态通知。 */
   agentStatus: () => AgentStatus | null;
   switchMode(mode: "compact" | "full"): void;
+  /** 改配置（与设置面板保存走同一个函数）与读当前配置。 */
+  applyConfig(config: AppConfig): AppConfig;
+  getConfig(): AppConfig;
+  toggleMaximize(): void;
+  isMaximized(): boolean;
 }
 
 export async function runSelfTest(ctx: SelfTestContext, outDir: string): Promise<number> {
@@ -147,10 +159,17 @@ export async function runSelfTest(ctx: SelfTestContext, outDir: string): Promise
     const beforeAsk = await probeLayout(ctx.win);
     const ask = trackRun(ctx.agent);
     try {
+      // 只带上锁路径、不带自检开关：第二个实例把参数交给已经在跑的实例就退出，
+      // 不给它任何变成完整实例的机会。
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        DESKTOP_AGENT_USERDATA: app.getPath("userData"),
+      };
+      delete env.DESKTOP_AGENT_SELFTEST;
       const second = spawn(
         process.execPath,
         [...(app.isPackaged ? [] : [app.getAppPath()]), "ask", ASK_PROMPT],
-        { stdio: "ignore" },
+        { stdio: "ignore", env },
       );
       second.on("error", (err) => console.error("[selftest] 启动第二个实例失败：", err));
       second.unref();
@@ -206,6 +225,105 @@ export async function runSelfTest(ctx: SelfTestContext, outDir: string): Promise
     } finally {
       shell.openExternal = originalOpenExternal;
       app.off("browser-window-created", onCreated);
+    }
+
+    // 7) 斜杠命令联想：输入 / 弹出命令列表，方向键 + Tab 把命令名补进输入框。
+    //    补全只改输入框内容、不提交，所以这一步不花模型调用。
+    await typeInto(ctx.win, "/");
+    const suggested = await waitFor(ctx.win, (p) => p.commandSuggestions > 0, 5_000);
+    const commands: Record<string, unknown> = { suggestions: suggested.commandSuggestions };
+    report.commands = commands;
+    if (suggested.commandSuggestions === 0) throw new Error("输入 / 后没有出现命令联想列表");
+    // DOM 里有不等于看得见：记下列表的位置和命中测试，截图前给合成器留一帧时间。
+    const popup = (await ctx.win.webContents.executeJavaScript(`(() => {
+      const el = document.querySelector('[role="listbox"][aria-label="斜杠命令"]');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 12);
+      return {
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        display: cs.display, visibility: cs.visibility, opacity: cs.opacity, zIndex: cs.zIndex,
+        hit: hit ? hit.tagName + "." + String(hit.className).slice(0, 60) : null,
+      };
+    })()`)) as Record<string, unknown> | null;
+    commands.popup = popup;
+    await sleep(350);
+    await snapshot(ctx.win, outDir, "4-commands.png");
+    await pressKey(ctx.win, "ArrowDown");
+    await pressKey(ctx.win, "Tab");
+    const completed = await probeLayout(ctx.win);
+    commands.completed = completed.inputValue;
+    if (!/^\/\S+ $/.test(completed.inputValue)) {
+      throw new Error(`Tab 补全后输入框应为「/命令名 」，实际：${JSON.stringify(completed.inputValue)}`);
+    }
+    if (completed.commandSuggestions !== 0) throw new Error("补全后联想列表应关闭");
+    await typeInto(ctx.win, "");
+
+    // 8) 工作目录可改：保存新目录后 Agent 按新参数重启，会话状态里的 cwd 跟着变；改回原值同理。
+    const originalConfig = ctx.getConfig();
+    const tryCwd = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-agent-selftest-cwd-"));
+    try {
+      ctx.applyConfig({ ...originalConfig, cwd: tryCwd });
+      const switched = await until(async () => (await ctx.agent.state()).cwd === tryCwd, 30_000);
+      ctx.applyConfig(originalConfig);
+      const restoredCwd = await until(async () => (await ctx.agent.state()).cwd === originalConfig.cwd, 30_000);
+      report.cwdSwitch = { switched, restored: restoredCwd };
+      if (!switched || !restoredCwd) {
+        throw new Error(`改工作目录后 Agent 没有按新目录重启：${JSON.stringify(report.cwdSwitch)}`);
+      }
+    } finally {
+      fs.rmSync(tryCwd, { recursive: true, force: true });
+    }
+
+    // 9) 最大化：状态记进配置并通知渲染进程；切到悬浮窗会还原，切回来恢复；还原后配置跟着更新。
+    //    这一段依赖合成器的异步时序，只跑一轮说明不了问题，连做三轮把竞态压实。
+    const rounds: Array<Record<string, unknown>> = [];
+    report.maximize = { rounds };
+    for (let round = 1; round <= 3; round++) {
+      const state: Record<string, unknown> = {};
+      rounds.push(state);
+      ctx.toggleMaximize();
+      state.maximized = await until(() => ctx.isMaximized(), 3_000);
+      state.restoreButton = (await waitFor(ctx.win, (p) => p.restoreButton, 3_000)).restoreButton;
+      state.remembered = ctx.getConfig().fullMaximized;
+      if (state.maximized !== true || state.restoreButton !== true) {
+        throw new Error(`第 ${round} 轮：最大化后窗口没有变成最大化，或渲染进程没收到状态`);
+      }
+      if (!ctx.getConfig().fullMaximized) throw new Error(`第 ${round} 轮：最大化偏好没有写进配置`);
+
+      ctx.switchMode("compact");
+      const compactOk = await until(
+        () => !ctx.isMaximized() && sizeOf(ctx.win).height === ctx.getConfig().compactHeight,
+        3_000,
+      );
+      state.afterCompact = {
+        maximized: ctx.isMaximized(),
+        remembered: ctx.getConfig().fullMaximized,
+        size: sizeOf(ctx.win),
+      };
+      if (!compactOk) {
+        throw new Error(`第 ${round} 轮：最大化状态下切到悬浮窗后尺寸不对：${JSON.stringify(sizeOf(ctx.win))}`);
+      }
+
+      ctx.switchMode("full");
+      const afterBack = {
+        maximized: await until(() => ctx.isMaximized(), 3_000),
+        remembered: ctx.getConfig().fullMaximized,
+      };
+      state.afterBack = afterBack;
+      if (afterBack.maximized !== true) {
+        throw new Error(`第 ${round} 轮：切回对话窗口后没有按偏好恢复最大化`);
+      }
+
+      ctx.toggleMaximize();
+      const restored = await until(() => !ctx.isMaximized(), 3_000);
+      await sleep(200);
+      const afterRestore = { maximized: ctx.isMaximized(), remembered: ctx.getConfig().fullMaximized };
+      state.afterRestore = afterRestore;
+      if (!restored || afterRestore.maximized || afterRestore.remembered) {
+        throw new Error(`第 ${round} 轮：还原后窗口状态或配置没有更新`);
+      }
     }
   }
 
@@ -288,6 +406,9 @@ async function probeLayout(win: BrowserWindow): Promise<LayoutProbe> {
       userTexts: [...document.querySelectorAll('[data-role="user"]')].map((el) => el.textContent.trim()),
       lastAssistantText: lastAssistant ? lastAssistant.textContent.trim() : "",
       visibility: document.visibilityState,
+      inputValue: document.querySelector("textarea")?.value ?? "",
+      commandSuggestions: document.querySelectorAll('[data-role="command-suggestion"]').length,
+      restoreButton: !!document.querySelector('button[aria-label="还原"]'),
       title: document.title,
     };
   })()`) as Promise<LayoutProbe>;
@@ -303,9 +424,8 @@ function clickNewSession(win: BrowserWindow): Promise<boolean> {
   })()`) as Promise<boolean>;
 }
 
-/** 像用户一样在输入框里打字并回车。 */
-async function typeAndSubmit(win: BrowserWindow, text: string): Promise<void> {
-  // 受控输入框直接改 value 不会触发 React：要先走原生 setter 再派发 input 事件。
+/** 像用户一样在输入框里打字。受控输入框直接改 value 不会触发 React：要先走原生 setter 再派发 input 事件。 */
+async function typeInto(win: BrowserWindow, text: string): Promise<void> {
   const typed = (await win.webContents.executeJavaScript(`(() => {
     const input = document.querySelector("textarea");
     if (!input) return false;
@@ -314,13 +434,40 @@ async function typeAndSubmit(win: BrowserWindow, text: string): Promise<void> {
     return true;
   })()`)) as boolean;
   if (!typed) throw new Error("没有找到输入框");
-  // 分两次执行：等 React 处理完 input 事件、状态落定后再回车。
-  await win.webContents.executeJavaScript(`(() => {
-    const input = document.querySelector("textarea");
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }),
+}
+
+/** 在输入框上按一个键。只派发 keydown：输入框的快捷键都靠它。 */
+function pressKey(win: BrowserWindow, key: string): Promise<void> {
+  return win.webContents.executeJavaScript(`(() => {
+    document.querySelector("textarea").dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: ${JSON.stringify(key)},
+        code: ${JSON.stringify(key)},
+        bubbles: true,
+        cancelable: true,
+      }),
     );
-  })()`);
+  })()`) as Promise<void>;
+}
+
+/** 打字并回车。分两次执行：等 React 处理完 input 事件、状态落定后再回车。 */
+async function typeAndSubmit(win: BrowserWindow, text: string): Promise<void> {
+  await typeInto(win, text);
+  await pressKey(win, "Enter");
+}
+
+/** 轮询到条件成立为止；超时返回 false。条件里的请求可能因 Agent 重启被拒，捕获后重试。 */
+async function until(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if (await condition()) return true;
+    } catch {
+      // 重试
+    }
+    await sleep(150);
+  }
+  return false;
 }
 
 /** 轮询布局快照直到满足条件；超时返回最后一次快照，由调用方断言。 */

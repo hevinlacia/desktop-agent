@@ -20,7 +20,7 @@ linux:
   icon: resources/icon.png
   executableName: desktop-agent
   category: Development
-  # 产物文件名不带空格：desktop-agent-0.2.0-x64.AppImage / .deb / .pacman（默认用 productName，带空格）。
+  # 产物文件名不带空格：desktop-agent-0.2.1-x64.AppImage / .deb / .pacman（默认用 productName，带空格）。
   # pacman 包会被 justfile 改名成 pacman -U 认的 .pkg.tar.xz。
   artifactName: ${name}-${version}-${arch}.${ext}
   # 能打的目标都列在这里。`just package` 默认只打 pacman（目前只在 Arch 系上使用），

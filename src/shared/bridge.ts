@@ -6,6 +6,7 @@ import type {
   SessionState,
   SessionStats,
   SessionSummary,
+  SlashCommand,
   WindowMode,
 } from "./protocol";
 
@@ -18,6 +19,8 @@ export const AGENT_RESET_CHANNEL = "agent://reset";
 export const AGENT_BOOT_ERROR_CHANNEL = "agent://boot-error";
 export const EXTERNAL_ASK_CHANNEL = "external://ask";
 export const WINDOW_MODE_CHANNEL = "window://mode-changed";
+/** 对话窗口最大化状态变化（按钮、窗口管理器快捷键都会触发）。 */
+export const WINDOW_MAXIMIZED_CHANNEL = "window://maximized-changed";
 
 export const EVENT_CHANNELS = [
   AGENT_EVENT_CHANNEL,
@@ -25,6 +28,7 @@ export const EVENT_CHANNELS = [
   AGENT_BOOT_ERROR_CHANNEL,
   EXTERNAL_ASK_CHANNEL,
   WINDOW_MODE_CHANNEL,
+  WINDOW_MAXIMIZED_CHANNEL,
 ] as const;
 export type EventChannel = (typeof EVENT_CHANNELS)[number];
 
@@ -35,6 +39,7 @@ export interface EventPayloads {
   "agent://boot-error": string;
   "external://ask": string;
   "window://mode-changed": WindowMode;
+  "window://maximized-changed": boolean;
 }
 
 /** 渲染进程可以调用的命令。主进程必须为每一项注册处理器（类型上强制）。 */
@@ -49,10 +54,14 @@ export const COMMANDS = [
   "agent_set_thinking_level",
   "agent_extension_ui_response",
   "agent_sessions",
+  "agent_commands",
   "window_hide",
   "window_switch_mode",
   "window_mode",
+  "window_toggle_maximize",
+  "window_is_maximized",
   "window_resize",
+  "dialog_pick_directory",
   "config_get",
   "config_set",
 ] as const;
@@ -73,10 +82,17 @@ export interface CommandIO {
   agent_set_thinking_level: { args: { level: string }; result: void };
   agent_extension_ui_response: { args: { response: ExtensionUiResponse }; result: void };
   agent_sessions: { args: null; result: SessionSummary[] };
+  /** 斜杠命令联想用的命令列表。 */
+  agent_commands: { args: null; result: SlashCommand[] };
   window_hide: { args: null; result: void };
   window_switch_mode: { args: { mode: WindowMode }; result: void };
   window_mode: { args: null; result: WindowMode };
+  /** 最大化 / 还原对话窗口。 */
+  window_toggle_maximize: { args: null; result: void };
+  window_is_maximized: { args: null; result: boolean };
   window_resize: { args: { width: number | null; height: number | null }; result: void };
+  /** 弹出系统的目录选择框；用户取消时返回 null。 */
+  dialog_pick_directory: { args: { defaultPath: string | null }; result: string | null };
   config_get: { args: null; result: AppConfig };
   config_set: { args: { config: AppConfig }; result: AppConfig };
 }

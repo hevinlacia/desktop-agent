@@ -9,6 +9,7 @@ import type { UtilityProcess } from "electron";
 import path from "node:path";
 import type {
   AgentEvent,
+  EarlierMessagesResult,
   ExtensionUiResponse,
   ModelInfo,
   NewSessionResult,
@@ -218,6 +219,16 @@ export class AgentProcess {
 
   newSession() {
     return this.send<NewSessionResult>((id) => ({ id, cmd: "newSession" }));
+  }
+
+  /** 调整会话常驻池参数（设置页保存后推送，不重启 Agent）。 */
+  setPoolConfig(poolSize: number, idleSuspendMs: number) {
+    return this.send<void>((id) => ({ id, cmd: "setPoolConfig", poolSize, idleSuspendMs }));
+  }
+
+  /** 往前翻页拿更早的消息（REQ-346 首屏只渲染最近一页）。 */
+  earlierMessages(fromEnd: number, count: number) {
+    return this.send<EarlierMessagesResult>((id) => ({ id, cmd: "earlierMessages", fromEnd, count }));
   }
 
   switchSession(sessionPath: string) {

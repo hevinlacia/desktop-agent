@@ -24,8 +24,11 @@ import type {
   SlashCommand,
 } from "@shared/protocol";
 import type { AgentInitOptions, AgentRequest, LogLevel } from "@shared/agentIpc";
+import type { EarlierMessagesResult } from "@shared/protocol";
 import { mapSessionEvent, toChatMessage, toModelInfo, toSessionSummary } from "./mapping";
 import { createPlainTheme } from "./plain-theme";
+import { clampPoolSize, pageSlice, pickEvict, pickIdle, type PoolEntryState } from "./sessionPool";
+import { SESSION_MESSAGES_PAGE } from "@shared/protocol";
 
 type ExtensionBindings = Parameters<AgentSession["bindExtensions"]>[0];
 type ExtensionUIContext = NonNullable<ExtensionBindings["uiContext"]>;
@@ -60,6 +63,44 @@ export class AgentHost {
   private dialogSeq = 0;
   private runtime!: InstanceType<typeof Pi.AgentSessionRuntime>;
   private session!: AgentSession;
+
+  // ---- 会话常驻池（REQ-346） ---------------------------------------------
+  /** sessionFile → 常驻运行时。最近用过的会话各持一个完整 runtime，池内切换≈0 成本。 */
+  private readonly pool = new Map<string, { runtime: AgentSessionRuntime; lastUsedAt: number }>();
+  /** 当前接线的会话文件（池 key；内存会话为 null）。 */
+  private currentFile: string | null = null;
+  private poolSize = clampPoolSize(Number.NaN);
+  private idleSuspendMs = 0;
+  private idleTimer: ReturnType<typeof setInterval> | undefined;
+  private agentDir = "";
+
+  /** 运行时工厂：start 与池内冷加载共用（原来内联在 start 里）。 */
+  private readonly createRuntime: CreateAgentSessionRuntimeFactory = async (target) => {
+    const settingsManager = this.pi.SettingsManager.create(target.cwd, target.agentDir);
+    const services = await this.pi.createAgentSessionServices({
+      cwd: target.cwd,
+      agentDir: target.agentDir,
+      settingsManager,
+      modelRuntimeSignal: AbortSignal.timeout(15_000),
+      resourceLoaderOptions: {
+        // 没有终端可显示安装输出，交给 pi 自己捕获。
+        packageCommandOutput: "capture",
+        noExtensions: !this.options.extensions,
+        // CLI 默认带的三类内置扩展，SDK 会话默认不带；补齐以保持和命令行一致。
+        extensionFactories: [
+          this.pi.createCodemodeExtension(),
+          this.pi.createToolSearchExtension(),
+          this.pi.createMcpExtension(),
+        ],
+      },
+    });
+    const created = await this.pi.createAgentSessionFromServices({
+      services,
+      sessionManager: target.sessionManager,
+      sessionStartEvent: target.sessionStartEvent,
+    });
+    return { ...created, services, diagnostics: [] };
+  };
   private unsubscribe: (() => void) | undefined;
   /** 上一次 rebind 时的会话 id：用来发现「不经过渲染进程的会话替换」（如扩展调 ctx.switchSession）。 */
   private lastSessionId: string | null = null;
@@ -70,51 +111,57 @@ export class AgentHost {
     const { pi, options } = this;
     const cwd = options.cwd;
     const agentDir = pi.getAgentDir();
+    this.agentDir = agentDir;
+    this.poolSize = clampPoolSize(options.sessionPoolSize);
+    this.idleSuspendMs = Math.max(0, Math.floor(options.sessionIdleSuspendMs) || 0);
     // 不持久化时用内存会话：关闭应用即丢弃，不在 pi 的会话目录留文件。
     const sessionManager = options.persistSession
       ? pi.SessionManager.create(cwd)
       : pi.SessionManager.inMemory(cwd);
 
-    const createRuntime: CreateAgentSessionRuntimeFactory = async (target) => {
-      const settingsManager = pi.SettingsManager.create(target.cwd, target.agentDir);
-      const services = await pi.createAgentSessionServices({
-        cwd: target.cwd,
-        agentDir: target.agentDir,
-        settingsManager,
-        modelRuntimeSignal: AbortSignal.timeout(15_000),
-        resourceLoaderOptions: {
-          // 没有终端可显示安装输出，交给 pi 自己捕获。
-          packageCommandOutput: "capture",
-          noExtensions: !options.extensions,
-          // CLI 默认带的三类内置扩展，SDK 会话默认不带；补齐以保持和命令行一致。
-          extensionFactories: [
-            pi.createCodemodeExtension(),
-            pi.createToolSearchExtension(),
-            pi.createMcpExtension(),
-          ],
-        },
-      });
-      const created = await pi.createAgentSessionFromServices({
-        services,
-        sessionManager: target.sessionManager,
-        sessionStartEvent: target.sessionStartEvent,
-      });
-      return { ...created, services, diagnostics: [] };
-    };
-
-    this.runtime = await pi.createAgentSessionRuntime(createRuntime, { cwd, agentDir, sessionManager });
+    this.runtime = await pi.createAgentSessionRuntime(this.createRuntime, { cwd, agentDir, sessionManager });
     this.runtime.setRebindSession(() => this.rebind());
     await this.rebind();
     // 启动时的会话沿用上个会话使用的模型；没记过（或已不可用）就是 pi 的默认模型。
     await this.applyLastModel(this.options.lastModel);
     this.lastModel = refOf(this.session.model);
+
+    // 闲置挂起扫描（REQ-346）：一分钟一次，把超时未用的池内会话 dispose 掉。
+    this.idleTimer = setInterval(() => this.suspendIdle(), 60_000);
+    this.idleTimer.unref?.();
   }
 
-  /** 会话被替换（新建 / 切换）后调用：旧订阅全部作废。 */
+  /**
+   * 会话被替换（新建 / 切换）后调用：旧订阅全部作废。
+   * 这里只负责「当前 runtime 内部换了 session 对象」的池同步（重新入池 + 驱逐），接线在 wire 里。
+   */
   private async rebind() {
-    this.session = this.runtime.session;
+    const rt = this.runtime;
+    const file = rt.session.sessionFile ?? null;
+    if (this.currentFile && this.currentFile !== file) {
+      const prev = this.pool.get(this.currentFile);
+      // runtime 内部替换（新建/扩展切换/fork）：旧 session 对象已被 pi 销毁，池 key 跟着 runtime 挪到新文件。
+      if (prev?.runtime === rt) this.pool.delete(this.currentFile);
+    }
+    if (file) {
+      this.pool.set(file, { runtime: rt, lastUsedAt: Date.now() });
+      this.evictIfNeeded();
+    }
+    this.currentFile = file;
+    await this.wire(rt, { bind: true });
+  }
+
+  /**
+   * 把某个池内运行时接线为「当前会话」：重接事件订阅，必要时绑定扩展。
+   * bind=true 用于刚创建/刚被 runtime 内部替换的新 session 对象（老 rebind 语义）；
+   * 池内命中复用已绑定的 session 对象，**不重绑**（重绑会重复投递扩展事件/重复注册命令）。
+   */
+  private async wire(rt: AgentSessionRuntime, opts?: { bind?: boolean }) {
+    this.session = rt.session;
+    this.runtime = rt;
+
+    // 先订阅再绑定扩展：session_start 处理器里产生的事件也要能送达；换接前先退订旧会话。
     this.unsubscribe?.();
-    // 先订阅再绑定扩展：session_start 处理器里产生的事件也要能送达。
     this.unsubscribe = this.session.subscribe((event) => {
       for (const mapped of mapSessionEvent(event, this.session.sessionId)) {
         this.send({ kind: "event", event: mapped });
@@ -130,6 +177,8 @@ export class AgentHost {
       this.emit({ type: "sessionReplaced", previousSessionId });
     }
 
+    if (!opts?.bind) return;
+    // 先订阅再绑定扩展：session_start 处理器里产生的事件也要能送达。
     await this.session.bindExtensions({
       uiContext: this.createUiContext(),
       // 与 pi 的 RPC 模式相同：告诉扩展「没有 TUI」。
@@ -145,7 +194,7 @@ export class AgentHost {
           const result = await this.session.navigateTree(targetId, opts);
           return { cancelled: result.cancelled };
         },
-        switchSession: (sessionPath, opts) => this.runtime.switchSession(sessionPath, opts),
+        switchSession: (sessionPath) => this.poolSwitch(sessionPath),
         reload: () => this.session.reload(),
       },
       onError: (err) => this.emitError(`扩展错误：${err.error}`),
@@ -154,9 +203,86 @@ export class AgentHost {
     for (const d of this.runtime.takeUnreportedDiagnostics()) this.log(diagnosticLevel(d.type), d.message);
   }
 
+  // ---- 会话常驻池（REQ-346） ---------------------------------------------
+
+  /**
+   * 切换会话：池内命中直接换接（≈0 成本，旧会话不销毁——这就是「常驻」）；
+   * 未命中冷加载一个独立 runtime 入池再激活（与旧 runtime.switchSession 同价）。
+   * 与 pi 的 runtime.switchSession 的差异：池内命中不触发扩展 before-switch 钩子（桌面端没有用它）；
+   * 旧会话不 teardown，由闲置挂起/驱逐回收。
+   */
+  private async poolSwitch(sessionPath: string, opts?: { cwdOverride?: string }): Promise<{ cancelled: boolean }> {
+    const hit = this.pool.get(sessionPath);
+    if (hit && !opts?.cwdOverride) {
+      hit.lastUsedAt = Date.now();
+      this.log("info", `池内命中切换：${sessionPath}`);
+      // session 对象没换（不重绑扩展），但 sessionId 变了要让渲染层重新 hydrate。
+      await this.wire(hit.runtime);
+      // 切到的会话自带模型，不覆盖；它成为之后新建会话时沿用的「上个会话使用的模型」。
+      this.lastModel = refOf(this.session.model);
+      return { cancelled: false };
+    }
+    const sm = this.pi.SessionManager.open(sessionPath, undefined, opts?.cwdOverride);
+    this.log("info", `冷加载会话入池：${sessionPath}`);
+    const rt = await this.pi.createAgentSessionRuntime(this.createRuntime, {
+      cwd: sm.getCwd(),
+      agentDir: this.agentDir,
+      sessionManager: sm,
+      sessionStartEvent: { type: "session_start", reason: "resume" },
+    });
+    rt.setRebindSession(() => {
+      // 只有「当前」运行时的内部替换（扩展发起新建/切换/fork）才需要重绑与池同步。
+      if (rt !== this.runtime) return Promise.resolve();
+      return this.rebind();
+    });
+    this.pool.set(sessionPath, { runtime: rt, lastUsedAt: Date.now() });
+    this.evictIfNeeded();
+    await this.wire(rt, { bind: true });
+    this.lastModel = refOf(this.session.model);
+    return { cancelled: false };
+  }
+
+  private evictIfNeeded() {
+    while (this.pool.size > this.poolSize) {
+      const victim = pickEvict(poolStates(this.pool), this.currentFile);
+      if (!victim) return; // 全忙或只剩当前：允许暂时超员，忙会话不能杀
+      this.pool.delete(victim);
+      void this.disposeRuntime(victim, "evict");
+    }
+  }
+
+  private suspendIdle() {
+    for (const key of pickIdle(poolStates(this.pool), this.currentFile, Date.now(), this.idleSuspendMs)) {
+      this.pool.delete(key);
+      void this.disposeRuntime(key, "idle");
+    }
+  }
+
+  private async disposeRuntime(key: string, reason: "evict" | "idle") {
+    const hit = this.pool.get(key);
+    try {
+      if (hit) {
+        this.log("info", `挂起会话（${reason}）：${key}`);
+        await hit.runtime.dispose();
+      }
+    } catch (err) {
+      this.log("warn", `挂起会话失败（忽略）：${errorMessage(err)}`);
+    }
+  }
+
   async shutdown() {
-    // dispose 会等凭据写入完成，避免 OAuth 刷新令牌丢失。
-    await this.runtime.dispose();
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    // dispose 会等凭据写入完成，避免 OAuth 刷新令牌丢失；池内所有运行时 + 当前（含内存会话）都收尾。
+    const runtimes = new Set<AgentSessionRuntime>([this.runtime]);
+    for (const p of this.pool.values()) runtimes.add(p.runtime);
+    this.pool.clear();
+    for (const rt of runtimes) {
+      try {
+        await rt.dispose();
+      } catch (err) {
+        this.log("warn", `会话收尾失败（忽略）：${errorMessage(err)}`);
+      }
+    }
   }
 
   // ---- 命令 -------------------------------------------------------------
@@ -177,12 +303,20 @@ export class AgentHost {
         return { sessionFile: this.session.sessionFile ?? null };
       }
       case "switchSession": {
-        const result = await this.runtime.switchSession(req.sessionPath);
+        const result = await this.poolSwitch(req.sessionPath);
         if (result.cancelled) throw new Error("切换会话被扩展取消");
-        // 切到的会话自带模型，不覆盖；它成为之后新建会话时沿用的「上个会话使用的模型」。
-        this.lastModel = refOf(this.session.model);
         return null;
       }
+      case "setPoolConfig": {
+        this.poolSize = clampPoolSize(req.poolSize);
+        this.idleSuspendMs = Math.max(0, Math.floor(req.idleSuspendMs) || 0);
+        // 立即按新阈值收敛一次（调小池/调短挂起时不用等下一个扫描周期）。
+        this.evictIfNeeded();
+        this.suspendIdle();
+        return null;
+      }
+      case "earlierMessages":
+        return this.earlierMessages(req.fromEnd, req.count);
       case "sessions":
         return this.sessions();
       case "sessionsAll":
@@ -218,6 +352,7 @@ export class AgentHost {
 
   private state(): SessionState {
     const s = this.session;
+    const mapped = this.mappedMessages();
     return {
       sessionId: s.sessionId || null,
       sessionFile: s.sessionFile ?? null,
@@ -227,8 +362,21 @@ export class AgentHost {
       thinkingLevel: s.thinkingLevel,
       isStreaming: s.isStreaming,
       isCompacting: s.isCompacting,
-      messages: s.messages.map(toChatMessage).filter((m): m is ChatMessage => m !== null),
+      // 只带最近一页（REQ-346）：大会话全量过 IPC + 全量渲染是切换卡顿的另一半根因。
+      messages: mapped.slice(-SESSION_MESSAGES_PAGE),
+      messagesTotal: mapped.length,
     };
+  }
+
+  private mappedMessages(): ChatMessage[] {
+    return this.session.messages.map(toChatMessage).filter((m): m is ChatMessage => m !== null);
+  }
+
+  /** 往前翻页拿更早的消息（MessageList 顶部「加载更早」）。 */
+  private earlierMessages(fromEnd: number, count: number): EarlierMessagesResult {
+    const mapped = this.mappedMessages();
+    const page = pageSlice(mapped, fromEnd, count);
+    return { messages: page.items, hasMore: page.hasMore, total: mapped.length };
   }
 
   /**
@@ -476,6 +624,17 @@ function fileSize(path: string): number {
 
 function refOf(model: { provider: string; id: string } | undefined): ModelRef | null {
   return model ? { provider: model.provider, id: model.id } : null;
+}
+
+export function poolStates(pool: ReadonlyMap<string, { runtime: AgentSessionRuntime; lastUsedAt: number }>): Map<string, PoolEntryState> {
+  const out = new Map<string, PoolEntryState>();
+  for (const [key, value] of pool) {
+    out.set(key, {
+      lastUsedAt: value.lastUsedAt,
+      busy: value.runtime.session.isStreaming || value.runtime.session.isCompacting,
+    });
+  }
+  return out;
 }
 
 export function errorMessage(err: unknown): string {

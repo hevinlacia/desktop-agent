@@ -6,6 +6,11 @@ const MIN_FULL_HEIGHT = 200;
 
 export const DEFAULT_SHORTCUT = "Super+Space";
 
+/** 会话常驻池默认大小与闲置挂起默认分钟数（REQ-346，设置页可改）。 */
+export const DEFAULT_SESSION_POOL_SIZE = 10;
+export const DEFAULT_SESSION_IDLE_SUSPEND_MINUTES = 10;
+export const MAX_SESSION_POOL_SIZE = 50;
+
 export function defaultConfig(homeDir: string): AppConfig {
   return {
     cwd: homeDir,
@@ -22,6 +27,8 @@ export function defaultConfig(homeDir: string): AppConfig {
     groups: [],
     activeGroupId: null,
     openSessions: {},
+    sessionPoolSize: DEFAULT_SESSION_POOL_SIZE,
+    sessionIdleSuspendMinutes: DEFAULT_SESSION_IDLE_SUSPEND_MINUTES,
   };
 }
 
@@ -47,6 +54,9 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
     groups: groups(raw.groups),
     activeGroupId: text(raw.activeGroupId) ?? null,
     openSessions: openSessions(raw.openSessions),
+    // 池大小夹到 [1, 50]；闲置分钟允许 0（= 不挂起），上限 24h 够用了
+    sessionPoolSize: num(raw.sessionPoolSize, d.sessionPoolSize, 1, MAX_SESSION_POOL_SIZE),
+    sessionIdleSuspendMinutes: num(raw.sessionIdleSuspendMinutes, d.sessionIdleSuspendMinutes, 0, 1440),
   };
 }
 
@@ -85,8 +95,8 @@ function bool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
-function num(v: unknown, fallback: number, min: number): number {
-  return typeof v === "number" && Number.isFinite(v) && v >= min ? v : fallback;
+function num(v: unknown, fallback: number, min: number, max = Number.POSITIVE_INFINITY): number {
+  return typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : fallback;
 }
 
 /**

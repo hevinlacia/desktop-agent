@@ -3,6 +3,7 @@ import type {
   AppConfig,
   ExtensionUiResponse,
   ModelInfo,
+  PanelRequirementBundle,
   PromptOutcome,
   SessionState,
   SessionStats,
@@ -66,6 +67,7 @@ export const COMMANDS = [
   "dialog_pick_directory",
   "config_get",
   "config_set",
+  "panel_requirements",
 ] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
@@ -99,6 +101,8 @@ export interface CommandIO {
   dialog_pick_directory: { args: { defaultPath: string | null }; result: string | null };
   config_get: { args: null; result: AppConfig };
   config_set: { args: { config: AppConfig }; result: AppConfig };
+  /** 当前会话绑定的 Agent Panel 需求（右侧信息栏）。 */
+  panel_requirements: { args: { sessionId: string | null }; result: PanelRequirementBundle };
 }
 
 /** 命令的统一返回：成功带 data，失败带可直接展示给用户的 error。 */

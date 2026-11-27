@@ -185,4 +185,26 @@ export interface AppConfig {
   fullMaximized: boolean;
   /** 上个会话使用的模型：新建会话时沿用。为空或该模型已不可用时回落到 pi 的默认模型。 */
   lastModel: ModelRef | null;
+  /** Agent Panel 地址（右侧需求栏用）。空串 = 自动探测（env → 内网 → tailnet）。 */
+  panelUrl: string;
+}
+
+/** 右侧信息栏展示的一条需求摘要（来自 Agent Panel）。 */
+export interface PanelRequirement {
+  id: string;
+  title: string;
+  status: string;
+  project?: string;
+  category?: string;
+  updatedAt?: number;
+}
+
+/** 当前会话绑定的需求集合。 */
+export interface PanelRequirementBundle {
+  ok: boolean;
+  /** 实际使用的 hub 地址；ok=false 时是最后尝试的地址。 */
+  hubUrl: string;
+  requirements: PanelRequirement[];
+  /** 失败原因（网络/非 JSON/无绑定等）。 */
+  error?: string;
 }

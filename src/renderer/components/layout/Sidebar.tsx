@@ -443,6 +443,15 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
                 />
                 保存到 pi 的会话目录（关闭则每次全新会话）
               </label>
+              <label className="mt-2 block text-[11px] text-ink-muted">
+                Agent Panel 地址（留空自动探测）
+                <input
+                  value={draft.panelUrl}
+                  onChange={(e) => setDraft({ ...draft, panelUrl: e.target.value })}
+                  placeholder="https://edge.tail260d93.ts.net"
+                  className="mt-1 w-full rounded-md border border-border-subtle bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-accent/60"
+                />
+              </label>
             </Group>
           </>
         )}

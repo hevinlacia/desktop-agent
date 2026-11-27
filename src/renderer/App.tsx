@@ -3,6 +3,7 @@ import { MessageList } from "@/components/chat/MessageList";
 import { InputBox } from "@/components/input/InputBox";
 import { BootErrorBar } from "@/components/layout/BootErrorBar";
 import { ExtensionUiDialog } from "@/components/layout/ExtensionUiDialog";
+import { RequirementPanel } from "@/components/layout/RequirementPanel";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import {
@@ -98,6 +99,8 @@ export default function App() {
           {compact ? <div className="min-h-0 flex-1" /> : <MessageList />}
           <InputBox compact={compact} />
         </div>
+        {/* 右侧需求信息栏：只在完整形态出现（悬浮窗只有 132px 高，塞不进侧栏） */}
+        {!compact && <RequirementPanel />}
       </div>
 
       <ExtensionUiDialog />

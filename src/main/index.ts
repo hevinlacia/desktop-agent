@@ -13,6 +13,7 @@ import { legacyKWinWarning } from "./legacy";
 import { registerIpc, type CommandHandlers } from "./ipc";
 import { registerToggleShortcut, unregisterShortcuts } from "./shortcut";
 import { runSelfTest } from "./selftest";
+import { fetchSessionRequirements } from "./panel-client";
 import { createTray } from "./tray";
 import {
   createMainWindow,
@@ -232,6 +233,9 @@ function createHandlers(): CommandHandlers {
     window_resize: ({ width, height }) => resizeWindow({ width, height }),
     config_get: () => getConfig(),
     config_set: ({ config }) => applyConfig(config),
+    // 右侧需求栏：只读 Agent Panel，失败降级为可展示的 error（不抛）。
+    panel_requirements: ({ sessionId }) =>
+      fetchSessionRequirements({ sessionId, configUrl: getConfig().panelUrl }),
     dialog_pick_directory: ({ defaultPath }) => pickDirectory(defaultPath),
   };
 }

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import type { PanelRequirement, PanelRequirementBundle } from "@shared/protocol";
 import { agentClient } from "@/services/agentClient";
 import { useAgentStore } from "@/stores/useAgentStore";
 import { cn } from "@/lib/utils";
+import { pollDue, requirementPageUrl, REQ_PANEL_POLL_MS } from "@/lib/reqPanel";
 
 const COLLAPSE_KEY = "desktop-agent:req-panel-collapsed";
 
@@ -42,10 +43,12 @@ function formatUpdated(ts: number | undefined): string {
 }
 
 /**
- * 右侧需求信息栏。
+ * 右侧需求信息栏（REQ-345）。
  *
  * - 只在完整形态出现：悬浮窗只有 132px 高，塞不进侧栏。
  * - 数据来自主进程代理的 Agent Panel（按当前会话的 sessionId 反查绑定需求）。
+ * - 刷新时机：会话切换、展开需求栏、页面从隐藏恢复、页面可见时每 30s（REQ_PANEL_POLL_MS）。
+ * - 失败容错：拿不到数据时保留上一次的成功结果并标「已过期」（stale），空着比误导强，误导比报错强。
  * - 折叠状态记在 localStorage，默认展开；折叠后是一条窄轨，点箭头展开。
  */
 export function RequirementPanel() {
@@ -53,31 +56,66 @@ export function RequirementPanel() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [bundle, setBundle] = useState<PanelRequirementBundle | null>(null);
   const [loading, setLoading] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
+  /** 上次成功刷新的时间；ref 给轮询判定用，避免 interval 随每次刷新重建。 */
+  const bundleRef = useRef<PanelRequirementBundle | null>(null);
+  const lastFetchedRef = useRef<number | null>(null);
 
   useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
   }, [collapsed]);
 
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      setBundle(await agentClient.panelRequirements(sessionId));
-    } catch (e) {
-      setBundle({
-        ok: false,
-        hubUrl: "",
-        requirements: [],
-        error: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [sessionId]);
+  /**
+   * 拉一次需求。失败（ok:false 或网络异常）分两种：
+   * - 从没成功过：展示错误卡（没数据可保留）；
+   * - 有旧数据：保留旧数据 + 标 stale，不清空（会话切换前的信息仍比空白有用）。
+   */
+  const reload = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!opts?.silent) setLoading(true);
+      try {
+        const next = await agentClient.panelRequirements(sessionId);
+        if (next.ok || !bundleRef.current?.ok) {
+          bundleRef.current = next;
+          setBundle(next);
+          setLastError(next.ok ? null : (next.error ?? "读取失败"));
+          setStale(!next.ok);
+          lastFetchedRef.current = Date.now();
+        } else {
+          setLastError(next.error ?? "读取失败");
+          setStale(true);
+        }
+      } catch (e) {
+        setLastError(e instanceof Error ? e.message : String(e));
+        if (bundleRef.current?.ok) setStale(true);
+      } finally {
+        if (!opts?.silent) setLoading(false);
+      }
+    },
+    [sessionId],
+  );
 
-  // 会话变了才重拉；折叠状态下也拉一次，展开时就有数据。
+  // 刷新时机（REQ-345）：sessionId 变 / 展开栏时立即刷；页面可见时每 30s 轮询；
+  // 从隐藏恢复时立即刷一次；隐藏或折叠期间 interval 空转（pollDue 拦下，不发请求）。
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (!collapsed) void reload({ silent: true });
+    const timer = window.setInterval(() => {
+      const due = pollDue(Date.now(), lastFetchedRef.current, {
+        visible: document.visibilityState === "visible",
+        collapsed,
+      });
+      if (due) void reload({ silent: true });
+    }, REQ_PANEL_POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible" && !collapsed) void reload({ silent: true });
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [reload, collapsed]);
 
   if (collapsed) {
     return (
@@ -90,6 +128,7 @@ export function RequirementPanel() {
         >
           <ChevronLeft size={13} />
         </button>
+        {stale && <span className="mt-1 size-1.5 rounded-full bg-amber-400/80" title="数据已过期，展开后自动刷新" />}
         <span className="mt-2 select-none text-[10px] leading-tight text-ink-muted/60 [writing-mode:vertical-rl]">
           需求
         </span>
@@ -101,8 +140,16 @@ export function RequirementPanel() {
 
   return (
     <div className="flex w-60 shrink-0 flex-col border-l border-border-subtle bg-surface-sunken/40">
-      <div className="flex items-center justify-between px-2 py-1.5">
+      <div className="flex items-center justify-between gap-1 px-2 py-1.5">
         <span className="text-[11px] font-medium text-ink-muted">需求</span>
+        {stale && (
+          <span
+            title={lastError ?? "刷新失败，显示的是上次成功的数据"}
+            className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-0.5 text-[9.5px] leading-none text-amber-300"
+          >
+            已过期
+          </span>
+        )}
         <span className="flex items-center gap-0.5">
           <button
             type="button"
@@ -140,7 +187,7 @@ export function RequirementPanel() {
         )}
 
         {requirements.map((req) => (
-          <RequirementCard key={req.id} req={req} />
+          <RequirementCard key={req.id} req={req} hubUrl={bundle?.hubUrl ?? ""} />
         ))}
       </div>
 
@@ -153,21 +200,34 @@ export function RequirementPanel() {
   );
 }
 
-function RequirementCard({ req }: { req: PanelRequirement }) {
-  return (
-    <div className="mb-1 rounded-md border border-border-subtle bg-surface px-2 py-1.5">
+/**
+ * 需求卡：整卡可点，系统浏览器打开面板需求页（`/requirement?id=`）。
+ * 链接经 target=_blank 走 window.ts 的 setWindowOpenHandler（isWebUrl 只放行 http(s)），
+ * 渲染进程不自己开窗口。hubUrl 缺失/非法时退化为纯展示卡。
+ */
+function RequirementCard({ req, hubUrl }: { req: PanelRequirement; hubUrl?: string }) {
+  const url = requirementPageUrl(hubUrl ?? "", req.id);
+
+  const body = (
+    <>
       <div className="flex items-center justify-between gap-1">
-        <a
-          href={`#${req.id}`}
-          title={`${req.id}（点击复制编号）`}
-          onClick={(e) => {
-            e.preventDefault();
-            void navigator.clipboard?.writeText(req.id).catch(() => undefined);
-          }}
+        <span
+          role={url ? "none" : "button"}
+          title={`点击复制编号 ${req.id}`}
+          onClick={
+            url
+              ? (e) => {
+                  // 整卡是链接：复制编号要拦住默认跳转
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void navigator.clipboard?.writeText(req.id).catch(() => undefined);
+                }
+              : () => void navigator.clipboard?.writeText(req.id).catch(() => undefined)
+          }
           className="truncate text-[11.5px] font-medium text-accent hover:underline"
         >
           {req.id}
-        </a>
+        </span>
         <span
           className={cn(
             "shrink-0 rounded border px-1 py-0.5 text-[10px] leading-none",
@@ -184,11 +244,25 @@ function RequirementCard({ req }: { req: PanelRequirement }) {
         <span className="truncate">{req.project ?? ""}</span>
         <span className="shrink-0">{formatUpdated(req.updatedAt)}</span>
       </div>
-    </div>
+    </>
+  );
+
+  if (!url) {
+    return <div className="mb-1 rounded-md border border-border-subtle bg-surface px-2 py-1.5">{body}</div>;
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      title={`在面板打开 ${req.id}`}
+      className="mb-1 block rounded-md border border-border-subtle bg-surface px-2 py-1.5 transition hover:border-accent/40 hover:bg-surface-raised"
+    >
+      {body}
+    </a>
   );
 }
 
 /** 供外部（如未来托盘菜单）复用的状态色判断。 */
 export { statusClass, formatUpdated };
 export type { PanelRequirement };
-export const REQUIREMENT_PANEL_ICON = ExternalLink;

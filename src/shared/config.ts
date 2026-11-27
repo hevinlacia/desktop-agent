@@ -18,6 +18,7 @@ export function defaultConfig(homeDir: string): AppConfig {
     fullHeight: 720,
     fullMaximized: false,
     lastModel: null,
+    panelUrl: "",
   };
 }
 
@@ -39,6 +40,7 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
     fullHeight: num(raw.fullHeight, d.fullHeight, MIN_FULL_HEIGHT),
     fullMaximized: bool(raw.fullMaximized, d.fullMaximized),
     lastModel: modelRef(raw.lastModel),
+    panelUrl: text(raw.panelUrl) ?? d.panelUrl,
   };
 }
 

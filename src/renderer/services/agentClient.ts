@@ -82,6 +82,8 @@ export const agentClient = {
   commands: () => call("agent_commands"),
   /** 切换模型用的可选列表（当前有可用凭据的模型）。 */
   models: () => call("agent_models"),
+  /** 当前会话绑定的 Agent Panel 需求（右侧信息栏）。 */
+  panelRequirements: (sessionId: string | null) => call("panel_requirements", { sessionId }),
 };
 
 export const windowClient = {

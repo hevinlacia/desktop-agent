@@ -11,7 +11,8 @@ import { AgentProcess } from "./agentProcess";
 import { getConfig, loadConfig, saveConfig } from "./config";
 import { legacyKWinWarning } from "./legacy";
 import { registerIpc, type CommandHandlers } from "./ipc";
-import { registerToggleShortcut, unregisterShortcuts } from "./shortcut";
+import { registerToggleShortcut, unregisterShortcut, unregisterShortcuts } from "./shortcut";
+import { isShortcutOptIn, planShortcut } from "./shortcutPolicy";
 import { runSelfTest } from "./selftest";
 import { fetchSessionRequirements } from "./panel-client";
 import { createTray } from "./tray";
@@ -240,15 +241,30 @@ function createHandlers(): CommandHandlers {
   };
 }
 
-function applyShortcut(accelerator: string): void {
-  const registered = registerToggleShortcut(accelerator, () => toggleWindow());
+function applyShortcut(accelerator: string): boolean {
+  const plan = planShortcut({
+    accelerator,
+    packaged: app.isPackaged,
+    optIn: isShortcutOptIn(process.env.DESKTOP_AGENT_SHORTCUT),
+  });
+  if (!plan.register) {
+    // 跳过不算失败：不要往界面上报错。开发态每次热重启都会走到这里，保持安静。
+    console.log(
+      plan.reason === "off"
+        ? "[shortcut] 配置里没有全局快捷键，跳过注册"
+        : `[shortcut] 开发态跳过全局快捷键 ${accelerator}（DESKTOP_AGENT_SHORTCUT=1 可强制注册）`,
+    );
+    return true;
+  }
+  const registered = registerToggleShortcut(plan.accelerator, () => toggleWindow());
   if (registered) {
     console.log(`[shortcut] 全局快捷键已注册：${registered}`);
-    return;
+    return true;
   }
   sendBootError(
     `全局快捷键 ${accelerator} 注册失败：写法不合法或已被其他应用占用。可以改配置文件里的 toggleShortcut，或用托盘菜单唤起。`,
   );
+  return false;
 }
 
 /** 保存设置，并处理需要立即生效的部分：快捷键、窗口尺寸、Agent 重启。 */
@@ -257,15 +273,14 @@ function applyConfig(next: AppConfig): AppConfig {
   let saved = saveConfig(next);
 
   if (saved.toggleShortcut !== prev.toggleShortcut) {
-    const registered = registerToggleShortcut(saved.toggleShortcut, () => toggleWindow());
-    if (!registered) {
-      // 新写法不可用：把原快捷键注册回去并回退这一项，其余设置照常生效。
+    // 先注册新的（失败时旧的还没被释放，仍在生效），成功后再精确释放旧的那一个。
+    if (!applyShortcut(saved.toggleShortcut)) {
       saved = saveConfig({ ...saved, toggleShortcut: prev.toggleShortcut });
-      registerToggleShortcut(prev.toggleShortcut, () => toggleWindow());
       throw new Error(
-        `快捷键 ${next.toggleShortcut} 注册失败（写法不合法或已被其他应用占用），已保留原来的 ${prev.toggleShortcut}；其余设置已保存。`,
+        `快捷键 ${next.toggleShortcut} 注册失败（写法不合法或已被其他应用占用），已保留原来的 ${prev.toggleShortcut || "（无）"}；其余设置已保存。`,
       );
     }
+    if (prev.toggleShortcut) unregisterShortcut(prev.toggleShortcut);
   }
 
   if (

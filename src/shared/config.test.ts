@@ -19,10 +19,18 @@ describe("resolveConfig", () => {
 
   it("非法值回退默认值，布尔缺失时保持默认开启", () => {
     const cfg = resolveConfig(
-      { cwd: "   ", toggleShortcut: "", compactWidth: -1, compactHeight: "132", fullHeight: Number.NaN, persistSession: "yes" },
+      { cwd: "   ", toggleShortcut: 42, compactWidth: -1, compactHeight: "132", fullHeight: Number.NaN, persistSession: "yes" },
       HOME,
     );
     expect(cfg).toEqual(defaultConfig(HOME));
+  });
+
+  it("toggleShortcut 清空 = 关闭全局快捷键，不能被回退成默认值", () => {
+    expect(resolveConfig({ toggleShortcut: "" }, HOME).toggleShortcut).toBe("");
+    expect(resolveConfig({ toggleShortcut: "  " }, HOME).toggleShortcut).toBe("");
+    expect(resolveConfig({ toggleShortcut: " Super+Space " }, HOME).toggleShortcut).toBe("Super+Space");
+    // 完全没写这个字段时才是默认值
+    expect(resolveConfig({}, HOME).toggleShortcut).toBe(defaultConfig(HOME).toggleShortcut);
   });
 
   it("lastModel 要 provider 和 id 都齐全，否则当作没有", () => {

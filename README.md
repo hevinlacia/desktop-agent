@@ -80,15 +80,32 @@ just package pacman appimage  # 可以混着点
 - 界面：侧边栏 → 设置 → 快捷键
 - 文件：`~/.config/desktop-agent/config.json` 的 `toggleShortcut`（Electron 写法，如 `Super+Space`、`Ctrl+Alt+A`；旧版的 `Meta+X` 会自动映射）
 
-**首次使用需要你授权一次**：Wayland 下全局快捷键由桌面 portal 代管，KDE 会弹出「全局快捷键权限请求」，确认后才生效。
+**清空 `toggleShortcut` = 关闭全局快捷键**（打包版也生效）。这样应用完全不向桌面申请快捷键，不会弹权限窗；想继续用一个快捷键唤起，就在桌面环境里自己绑：
+
+- KDE：系统设置 → 快捷键 → 添加命令/脚本 → 触发器设为 `Meta+Space`，动作填 `desktop-agent toggle`
+- 其它桌面同理（GNOME 自定义快捷键、sway 的 `bindsym`）
+
+**打包版首次使用需要你授权一次**：Wayland 下全局快捷键由桌面 portal 代管，KDE 会弹出「全局快捷键权限请求」，确认后才生效。注意 Chromium 每次注册都会用一个新的随机 id，而 KDE 按 id 记授权 —— 所以**每次启动都会再弹一次**。嫌烦就按上面那条置空 + 系统自定义快捷键。
+
+**开发模式（`just dev`）默认不注册快捷键**：开发态没有已安装的 `.desktop` 身份，绑上了也用不了，而主进程一改就重启、每重启一次弹一次权限窗。要调 portal 链路就是这样强制打开：
+
+```bash
+DESKTOP_AGENT_SHORTCUT=1 just dev
+```
 
 没生效时按顺序排查：
 
 1. 应用顶部有没有错误条（注册失败、旧版 KWin 脚本残留都会在这里提示）
-2. 从终端启动，看日志里有没有 `[shortcut] 全局快捷键已注册：…`
+2. 从终端启动，看日志里有没有 `[shortcut] 全局快捷键已注册：…`（开发态会看到「开发态跳过全局快捷键」）
 3. 是不是以 AppImage 方式运行的（没有桌面身份）
 4. 有没有被别的程序占用：`grep -n 'Meta+Space' ~/.config/kglobalshortcutsrc`
 5. 开发模式（`just dev`）下不要指望快捷键能用，用下面的替代方式
+
+`kglobalshortcutsrc` 里的 `[desktop-agent]` 段会随着每次启动堆积僵尸条目（旧版实现留下的，已修）。清理：
+
+```bash
+kwriteconfig6 --file kglobalshortcutsrc --delete-group desktop-agent
+```
 
 命令行（再启动一次程序即可，参数会转交给已经在跑的实例）：
 
@@ -124,7 +141,7 @@ qdbus6 org.kde.KWin /KWin reconfigure
 | `cwd` | Agent 工作目录（工具的 cwd、会话按此目录归组） |
 | `persistSession` | 会话是否保存到 pi 的会话目录；`false` = 内存会话，关闭即丢 |
 | `extensions` | 是否加载 pi 的扩展（等同 CLI 的 `--no-extensions` 取反） |
-| `toggleShortcut` | 全局快捷键，Electron 写法 |
+| `toggleShortcut` | 全局快捷键，Electron 写法；**置空 = 不注册**（打包版也不注册，改用系统自定义快捷键调 `desktop-agent toggle`） |
 | `compactWidth` / `compactHeight` | 悬浮窗尺寸，默认 720×132 |
 | `fullWidth` / `fullHeight` | 完整窗口尺寸，默认 1080×720；最大化时的还原尺寸 |
 | `fullMaximized` | 对话窗口是否最大化。点过标题栏的最大化按钮就会记住：切到悬浮窗再回来、下次启动都照此恢复 |

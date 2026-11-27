@@ -172,3 +172,31 @@ describe("toUsage", () => {
     expect(toUsage({ ...zeroUsage(), reasoning: 3 })).toMatchObject({ reasoning: 3 });
   });
 });
+
+describe("toChatMessage 工具输出截断（REQ-346 修复轮）", () => {
+  const bigToolResult = {
+    role: "toolResult" as const,
+    toolCallId: "t1",
+    toolName: "bash",
+    content: [{ type: "text" as const, text: "H".repeat(20 * 1024) }],
+    isError: false,
+    timestamp: 9,
+  };
+
+  it("超过 16KB 的输出保留头尾并标注总长度", () => {
+    const chat = toChatMessage(bigToolResult);
+    expect(chat?.role).toBe("tool");
+    if (chat?.role !== "tool") return;
+    expect(chat.content).toContain("…（输出已截断，完整共 20KB");
+    // 头 12KB + 尾 4KB + 标注，总长被压回 16KB 量级
+    expect(chat.content.length).toBeLessThan(17 * 1024);
+    expect(chat.content.startsWith("H")).toBe(true);
+    expect(chat.content.endsWith("H")).toBe(true);
+  });
+
+  it("小输出原样保留", () => {
+    const chat = toChatMessage({ ...bigToolResult, content: [{ type: "text" as const, text: "ok" }] });
+    if (chat?.role !== "tool") return;
+    expect(chat.content).toBe("ok");
+  });
+});

@@ -232,5 +232,21 @@ function textParts(content: ReadonlyArray<{ type: string; text?: string }>): str
 function resultText(result: unknown): string {
   if (typeof result !== "object" || result === null || !("content" in result)) return "";
   const content = (result as { content?: unknown }).content;
-  return Array.isArray(content) ? textParts(content as { type: string; text?: string }[]).join("\n") : "";
+  return Array.isArray(content) ? truncateOutput(textParts(content as { type: string; text?: string }[]).join("\n")) : "";
+}
+
+/**
+ * 工具输出进入 IPC/渲染层的截断（REQ-346 修复轮）：WMS 大会话单页消息可达 20-30MB，
+ * 全量克隆传输 + 渲染是池命中后仍慢的隐性成本。保留头尾（头 12KB + 尾 4KB），
+ * 标注总长度；完整原文始终在 pi 会话文件里，桌面端只是查看器。
+ */
+const TOOL_OUTPUT_MAX = 16 * 1024;
+const TOOL_OUTPUT_TAIL = 4 * 1024;
+
+function truncateOutput(text: string): string {
+  if (text.length <= TOOL_OUTPUT_MAX) return text;
+  const head = text.slice(0, TOOL_OUTPUT_MAX - TOOL_OUTPUT_TAIL);
+  const tail = text.slice(-TOOL_OUTPUT_TAIL);
+  const kb = Math.round(text.length / 102.4) / 10;
+  return `${head}\n…（输出已截断，完整共 ${kb}KB，原文见 pi 会话文件）\n${tail}`;
 }

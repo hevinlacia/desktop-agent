@@ -214,16 +214,17 @@ export class AgentHost {
   private async poolSwitch(sessionPath: string, opts?: { cwdOverride?: string }): Promise<{ cancelled: boolean }> {
     const hit = this.pool.get(sessionPath);
     if (hit && !opts?.cwdOverride) {
-      hit.lastUsedAt = Date.now();
-      this.log("info", `池内命中切换：${sessionPath}`);
+      const t0 = Date.now();
+      hit.lastUsedAt = t0;
       // session 对象没换（不重绑扩展），但 sessionId 变了要让渲染层重新 hydrate。
       await this.wire(hit.runtime);
       // 切到的会话自带模型，不覆盖；它成为之后新建会话时沿用的「上个会话使用的模型」。
       this.lastModel = refOf(this.session.model);
+      this.log("info", `池内命中切换：${sessionPath}（${Date.now() - t0}ms，池 ${this.pool.size}/${this.poolSize}）`);
       return { cancelled: false };
     }
     const sm = this.pi.SessionManager.open(sessionPath, undefined, opts?.cwdOverride);
-    this.log("info", `冷加载会话入池：${sessionPath}`);
+    const coldT0 = Date.now();
     const rt = await this.pi.createAgentSessionRuntime(this.createRuntime, {
       cwd: sm.getCwd(),
       agentDir: this.agentDir,
@@ -239,6 +240,7 @@ export class AgentHost {
     this.evictIfNeeded();
     await this.wire(rt, { bind: true });
     this.lastModel = refOf(this.session.model);
+    this.log("info", `冷加载会话入池：${sessionPath}（${Date.now() - coldT0}ms，池 ${this.pool.size}/${this.poolSize}）`);
     return { cancelled: false };
   }
 

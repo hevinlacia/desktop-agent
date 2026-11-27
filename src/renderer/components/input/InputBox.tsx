@@ -15,7 +15,8 @@ interface CommandCache {
 }
 
 /**
- * 输入框。紧凑形态只有这一行；完整形态固定在底部。
+ * 输入框。卡片式样式（REQ-343，参考 DeepSeek）：大圆角独立容器，上行 textarea、
+ * 下行操作行——左侧胶囊插槽（运行状态），右侧圆形发送/中止与 compact 展开按钮。
  * 关键交互：
  * - Enter 发送，Shift+Enter 换行
  * - Esc 收起窗口
@@ -89,12 +90,12 @@ export function InputBox({ compact }: { compact: boolean }) {
 
   useEffect(() => () => void setCommandPopupHeight(0), [setCommandPopupHeight]);
 
-  // 自动增高，上限 6 行（紧凑形态上限 3 行）。
+  // 自动增高，上限 6 行（紧凑形态上限 2 行：悬浮窗总高 132px，卡片 padding 后 3 行会溢出，超出部分在 textarea 内滚动）。
   useEffect(() => {
     const el = taRef.current;
     if (!el) return;
     el.style.height = "auto";
-    const maxRows = compact ? 3 : 6;
+    const maxRows = compact ? 2 : 6;
     const lineHeight = 20;
     el.style.height = `${Math.min(el.scrollHeight, maxRows * lineHeight + 10)}px`;
   }, [text, compact]);
@@ -126,81 +127,83 @@ export function InputBox({ compact }: { compact: boolean }) {
   };
 
   return (
-    <div
-      className={cn(
-        "relative shrink-0 border-border-subtle bg-surface-raised",
-        compact ? "border-t-0" : "border-t",
-      )}
-    >
+    <div className={cn("relative shrink-0", compact ? "px-2 pt-1.5 pb-1" : "px-3 pt-1.5 pb-3")}>
       {open && (
         <CommandSuggestions items={matches} active={active} onPick={acceptCommand} containerRef={popupRef} />
       )}
-      <div className="flex items-end gap-1.5 px-3 py-2">
-        <textarea
-          ref={taRef}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setCaret(e.target.selectionStart ?? e.target.value.length);
-          }}
-          onKeyDown={(e) => {
-            // 输入法组字期间的按键是给候选词的，不碰。
-            if (e.nativeEvent.isComposing) return;
-            if (open) {
-              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                e.preventDefault();
-                setActive((i) => (i + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
-                return;
+      <div className="rounded-2xl border border-border-subtle bg-surface-raised shadow-sm">
+        <div className={cn("px-3", compact ? "pt-1.5" : "pt-2")}>
+          <textarea
+            ref={taRef}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setCaret(e.target.selectionStart ?? e.target.value.length);
+            }}
+            onKeyDown={(e) => {
+              // 输入法组字期间的按键是给候选词的，不碰。
+              if (e.nativeEvent.isComposing) return;
+              if (open) {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setActive((i) => (i + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+                  return;
+                }
+                if (e.key === "Tab" || e.key === "Enter") {
+                  // 此刻还没输入空格，回车的含义是「选中这条命令」而不是发送。
+                  e.preventDefault();
+                  const chosen = matches[active];
+                  if (chosen) acceptCommand(chosen);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setDismissed(true);
+                  return;
+                }
               }
-              if (e.key === "Tab" || e.key === "Enter") {
-                // 此刻还没输入空格，回车的含义是「选中这条命令」而不是发送。
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                const chosen = matches[active];
-                if (chosen) acceptCommand(chosen);
-                return;
+                void submit();
+              } else if (e.key === "Escape") {
+                e.currentTarget.blur();
+                void windowClient.hide();
               }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                setDismissed(true);
-                return;
-              }
-            }
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void submit();
-            } else if (e.key === "Escape") {
-              e.currentTarget.blur();
-              void windowClient.hide();
-            }
-          }}
-          rows={1}
-          placeholder={running ? "运行中…回车可插入补充指令" : "问点什么，或 / 触发命令"}
-          className="selectable max-h-40 min-h-[26px] flex-1 resize-none bg-transparent text-[13.5px] leading-relaxed outline-none placeholder:text-ink-muted/60"
-          spellCheck={false}
-        />
-
-        {running ? (
-          <IconButton label="中止" onClick={() => void abort()} danger>
-            <Square size={11} className="fill-current" />
-          </IconButton>
-        ) : (
-          <IconButton label="发送" onClick={() => void submit()} disabled={!text.trim()}>
-            <ArrowUp size={13} />
-          </IconButton>
-        )}
-
-        {compact && (
-          <IconButton label="展开为对话窗口" onClick={() => void setMode("full")}>
-            <Expand size={12} />
-          </IconButton>
-        )}
-      </div>
-      {running && (
-        <div className="flex items-center gap-1.5 px-3 pb-1.5 text-[10.5px] text-ink-muted">
-          <Loader2 size={10} className="animate-spin" />
-          运行中
+            }}
+            rows={1}
+            placeholder={running ? "运行中…回车可插入补充指令" : "问点什么，或 / 触发命令"}
+            className="selectable max-h-40 min-h-[26px] w-full resize-none bg-transparent text-[13.5px] leading-relaxed outline-none placeholder:text-ink-muted/60"
+            spellCheck={false}
+          />
         </div>
-      )}
+        <div className={cn("flex items-center justify-between gap-2 pl-3", compact ? "pb-1 pr-1" : "pb-1.5 pr-1.5")}>
+          {/* 左侧胶囊插槽：运行中显示状态胶囊（替代旧的底部提示行）；后续可挂更多胶囊能力 */}
+          <div className="flex min-w-0 items-center">
+            {running && (
+              <span className="flex items-center gap-1 rounded-full border border-border-subtle bg-surface-sunken px-2 py-[3px] text-[10.5px] text-ink-muted">
+                <Loader2 size={10} className="animate-spin" />
+                运行中
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {compact && (
+              <IconButton label="展开为对话窗口" onClick={() => void setMode("full")}>
+                <Expand size={12} />
+              </IconButton>
+            )}
+            {running ? (
+              <RoundButton label="中止" onClick={() => void abort()} tone="danger">
+                <Square size={11} className="fill-current" />
+              </RoundButton>
+            ) : (
+              <RoundButton label="发送" onClick={() => void submit()} disabled={!text.trim()} tone="accent">
+                <ArrowUp size={14} strokeWidth={2.5} />
+              </RoundButton>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -218,17 +221,33 @@ function filterCommands(list: SlashCommand[], query: string): SlashCommand[] {
   return q ? list.filter((cmd) => cmd.name.toLowerCase().startsWith(q)) : list;
 }
 
-function IconButton({
+/** ghost 方形小按钮（compact 展开这类次级动作）。 */
+function IconButton({ children, onClick, label }: { children: React.ReactNode; onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className="grid size-7 shrink-0 place-items-center rounded-full text-ink-muted transition hover:bg-surface-sunken hover:text-ink"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 圆形主操作按钮：发送（accent）与中止（danger），同参考图的圆形强调色按钮。 */
+function RoundButton({
   children,
   onClick,
   disabled,
-  danger,
+  tone,
   label,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
-  danger?: boolean;
+  tone: "accent" | "danger";
   label: string;
 }) {
   return (
@@ -239,11 +258,9 @@ function IconButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "grid size-7 shrink-0 place-items-center rounded-md transition",
-        danger
-          ? "bg-danger/10 text-danger hover:bg-danger/20"
-          : "bg-accent-soft text-accent hover:bg-accent/20",
-        disabled && "cursor-not-allowed opacity-35 hover:bg-accent-soft",
+        "grid size-7 shrink-0 place-items-center rounded-full text-white transition",
+        tone === "accent" ? "bg-accent hover:bg-accent/85" : "bg-danger hover:bg-danger/85",
+        disabled && "cursor-not-allowed opacity-35 hover:bg-accent",
       )}
     >
       {children}

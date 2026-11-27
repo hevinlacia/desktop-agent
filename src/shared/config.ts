@@ -33,7 +33,7 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
     cwd: expandHome(text(raw.cwd) ?? d.cwd, homeDir),
     persistSession: bool(raw.persistSession, d.persistSession),
     extensions: bool(raw.extensions, d.extensions),
-    toggleShortcut: text(raw.toggleShortcut) ?? d.toggleShortcut,
+    toggleShortcut: shortcut(raw.toggleShortcut) ?? d.toggleShortcut,
     compactWidth: num(raw.compactWidth, d.compactWidth, MIN_WINDOW.width),
     compactHeight: num(raw.compactHeight, d.compactHeight, MIN_WINDOW.height),
     fullWidth: num(raw.fullWidth, d.fullWidth, MIN_WINDOW.width),
@@ -64,6 +64,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function text(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined;
+}
+
+/**
+ * 快捷键取「原样 trim 后的字符串」：空字符串也要保留。
+ * 清空 = 不注册全局快捷键（自己用系统自定义快捷键调 `desktop-agent toggle`），
+ * 所以要能和「没写这个字段」区分开（REQ-342）。
+ */
+function shortcut(v: unknown): string | undefined {
+  return typeof v === "string" ? v.trim() : undefined;
 }
 
 function bool(v: unknown, fallback: boolean): boolean {

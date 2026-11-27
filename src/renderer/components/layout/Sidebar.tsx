@@ -416,7 +416,8 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
                 className="w-full rounded border border-border-subtle bg-surface px-1.5 py-1 font-mono text-[11px] outline-none focus:border-accent/50"
               />
               <div className="mt-1 text-[10px] leading-snug text-ink-muted/60">
-                改完保存立即生效。Linux Wayland 下只有安装版应用能绑定全局快捷键。
+                改完保存立即生效。Linux Wayland 下只有安装版应用能绑定全局快捷键；清空 = 不注册
+                （改用系统自定义快捷键调 desktop-agent toggle，打包版也不会弹权限窗）。
               </div>
             </Group>
 

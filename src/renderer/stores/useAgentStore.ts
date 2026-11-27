@@ -61,6 +61,8 @@ interface AgentStore {
   /** 正在执行扩展斜杠命令（不跑模型）：与 running 区分，避免误显示「等待模型响应」。 */
   commandRunning: boolean;
   compacting: boolean;
+  /** 重启/恢复会话期间的进度提示（REQ-344 ④）：这个窗口期没有事件流，不提示就像卡死。 */
+  sessionBusy: "restart" | "resume" | null;
   live: LiveBlock[];
   toolExec: Record<string, ToolExecution>;
   extensionUi: ExtensionUiRequest | null;
@@ -148,6 +150,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   running: false,
   commandRunning: false,
   compacting: false,
+  sessionBusy: null,
   live: [],
   toolExec: {},
   extensionUi: null,
@@ -450,11 +453,12 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   async newSession() {
     set({ ...EMPTY, running: false, compacting: false });
-    await agentClient.newSession();
+    // 契约（REQ-344 ②）：宿主 newSession 直接返回新会话文件，登记不再依赖事后猜时序。
+    const info = await agentClient.newSession();
     const state = await agentClient.state();
     set(hydrate(state));
-    // 新会话的文件就在这次 state 里：直接登记，不靠事后轮询猜时序。
-    if (state.sessionFile) await get().registerSessionFile(state.sessionFile);
+    const file = info.sessionFile ?? state.sessionFile;
+    if (file) await get().registerSessionFile(file);
   },
 
   async switchSession(path) {
@@ -469,14 +473,20 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
    * 只做「新建会话」：切分组已改为不重启（pi 会跟随会话自己的 cwd）。
    */
   async restoreAfterRestart() {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try {
-        await get().newSession();
-        await get().registerCurrentSession();
-        return;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    // 重启后的恢复有重试退避，慢时十几秒：期间挂进度提示（REQ-344 ④）。
+    set({ sessionBusy: "resume" });
+    try {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          await get().newSession();
+          await get().registerCurrentSession();
+          return;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+        }
       }
+    } finally {
+      set({ sessionBusy: null });
     }
   },
 
@@ -579,19 +589,34 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       const opened = group ? (st.openSessions[group.id] ?? []) : [];
       if (group && opened.length === 0 && group.path !== cfg.cwd) {
         // pi 的 newSession 用当前 runtime cwd，所以空分组首次新建必须以该目录启动。
-        await get().saveConfig({
-          ...cfg,
-          groups: st.groups,
-          activeGroupId: st.activeGroupId,
-          openSessions: st.openSessions,
-          cwd: group.path,
-        });
+        set({ sessionBusy: "restart" });
+        try {
+          await get().saveConfig({
+            ...cfg,
+            groups: st.groups,
+            activeGroupId: st.activeGroupId,
+            openSessions: st.openSessions,
+            cwd: group.path,
+          });
+        } catch (e) {
+          set({ sessionBusy: null });
+          throw e;
+        }
+        // saveConfig 返回后 Agent 异步重启，reset→restoreAfterRestart 接手置 "resume" 并清空。
+        // reset 事件万一丢了提示会挂死：看门犬兆底清空（测试环境无 window，直接清）。
+        if (typeof window !== "undefined") {
+          window.setTimeout(() => {
+            if (get().sessionBusy === "restart") set({ sessionBusy: null });
+          }, 20_000);
+        } else {
+          set({ sessionBusy: null });
+        }
         return; // 重启后 restoreAfterRestart 会新建 + 登记
       }
       await get().newSession();
       await get().registerCurrentSession();
     } catch (e) {
-      set((s) => ({ messages: [...s.messages, notice(errText(e), "error")] }));
+      set((s) => ({ messages: [...s.messages, notice(errText(e), "error")], sessionBusy: null }));
     }
   },
 

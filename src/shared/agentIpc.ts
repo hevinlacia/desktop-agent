@@ -3,6 +3,7 @@ import type {
   ExtensionUiResponse,
   ModelInfo,
   ModelRef,
+  NewSessionResult,
   PromptOutcome,
   SessionState,
   SessionStats,
@@ -50,7 +51,7 @@ export interface AgentReplies {
   state: SessionState;
   prompt: PromptOutcome;
   abort: null;
-  newSession: null;
+  newSession: NewSessionResult;
   switchSession: null;
   sessions: SessionSummary[];
   commands: SlashCommand[];

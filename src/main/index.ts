@@ -172,8 +172,10 @@ async function boot(): Promise<void> {
     show: (mode) => showWindow(mode),
     toggle: () => toggleWindow(),
     newSession: async () => {
-      await agent.newSession();
-      sendToRenderer(AGENT_RESET_CHANNEL, null);
+      // 契约（REQ-344 ②）：宿主新建完把新会话文件交给渲染进程登记；
+      // 此前发的是无 payload 的 reset，渲染进程会再建一个会话（双会话，第一个变孤儿）。
+      const info = await agent.newSession();
+      sendToRenderer(AGENT_RESET_CHANNEL, { sessionFile: info.sessionFile });
       showWindow("full");
     },
     quit: () => app.quit(),
@@ -295,7 +297,7 @@ function applyConfig(next: AppConfig): AppConfig {
 
   if (saved.cwd !== prev.cwd || saved.persistSession !== prev.persistSession || saved.extensions !== prev.extensions) {
     // 这三项是子进程的启动参数，只能重启。期间发来的请求会等新进程就绪。
-    sendToRenderer(AGENT_RESET_CHANNEL, null);
+    sendToRenderer(AGENT_RESET_CHANNEL, { sessionFile: null });
     void agent
       .restart(agentOptions(saved))
       .catch((err: unknown) => sendBootError(`Agent 重启失败：${errorMessage(err)}`));

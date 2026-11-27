@@ -3,6 +3,7 @@ import type {
   AppConfig,
   ExtensionUiResponse,
   ModelInfo,
+  NewSessionResult,
   PanelRequirementBundle,
   PromptOutcome,
   SessionState,
@@ -37,7 +38,12 @@ export type EventChannel = (typeof EVENT_CHANNELS)[number];
 /** 各事件通道的 payload 类型。 */
 export interface EventPayloads {
   "agent://event": AgentEvent;
-  "agent://reset": null;
+  /**
+   * payload.sessionFile 非空 = 宿主侧（托盘）新建了会话：渲染进程只需登记它，
+   * 视图刷新靠 sessionReplaced 事件（REQ-344 ②，此前托盘路径会让渲染进程再建一个会话）。
+   * sessionFile 为 null = Agent 重启：走 restoreAfterRestart 恢复现场。
+   */
+  "agent://reset": { sessionFile: string | null };
   "agent://boot-error": string;
   "external://ask": string;
   "window://mode-changed": WindowMode;
@@ -80,7 +86,7 @@ export interface CommandIO {
     result: PromptOutcome;
   };
   agent_abort: { args: null; result: void };
-  agent_new_session: { args: null; result: void };
+  agent_new_session: { args: null; result: NewSessionResult };
   agent_switch_session: { args: { sessionPath: string }; result: void };
   agent_stats: { args: null; result: SessionStats };
   agent_set_model: { args: { provider: string; modelId: string }; result: void };

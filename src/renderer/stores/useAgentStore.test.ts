@@ -18,7 +18,7 @@ vi.mock("@/services/agentClient", () => ({
     })),
     send: vi.fn(async () => sendOutcome.value),
     abort: vi.fn(async () => undefined),
-    newSession: vi.fn(async () => undefined),
+    newSession: vi.fn(async () => ({ sessionFile: "/s/new-session.jsonl" })),
     switchSession: vi.fn(async () => undefined),
     stats: vi.fn(async () => ({ userMessages: 0 })),
     setModel: vi.fn(async () => undefined),

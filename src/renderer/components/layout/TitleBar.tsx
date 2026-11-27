@@ -18,7 +18,9 @@ import type { WindowMode } from "@shared/protocol";
 export function TitleBar({ mode }: { mode: WindowMode }) {
   const sessionName = useAgentStore((s) => s.sessionName);
   const stats = useAgentStore((s) => s.stats);
-  const setMode = useAgentStore((s) => s.setMode);  const newSession = useAgentStore((s) => s.newSession);
+  const setMode = useAgentStore((s) => s.setMode);
+  // 入口统一（REQ-344 ②）：标题栏也走分组语义的新建，空分组首次新建才会在正确的目录重启。
+  const createSession = useAgentStore((s) => s.createSessionInActiveGroup);
 
   const pct = stats?.contextUsage?.percent ?? null;
   const [maximized, setMaximized] = useState(false);
@@ -59,7 +61,7 @@ export function TitleBar({ mode }: { mode: WindowMode }) {
       )}
 
       <div className="flex shrink-0 items-center gap-0.5">
-        <BarButton label="新建会话" onClick={() => void newSession()}>
+        <BarButton label="新建会话" onClick={() => void createSession()}>
           <MessageSquarePlus size={12} />
         </BarButton>
         <SessionMenu />

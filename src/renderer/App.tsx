@@ -42,8 +42,17 @@ export default function App() {
 
     track(onAgentEvent(applyEvent));
     track(onBootError(setBootError));
-    // Agent 重启后恢复该分组打开的会话，而不是白建一个空会话（REQ-341）。
-    track(onReset(() => void restoreAfterRestart()));
+    // Agent 重启后恢复现场（REQ-341）；托盘新建的会话（sessionFile 非空）只补登记，
+    // 视图刷新靠 sessionReplaced 事件——此前这条路径会让渲染进程再建一个会话（REQ-344 ②）。
+    track(
+      onReset((payload) => {
+        if (payload.sessionFile) {
+          void useAgentStore.getState().registerSessionFile(payload.sessionFile);
+        } else {
+          void restoreAfterRestart();
+        }
+      }),
+    );
     track(onExternalAsk((text) => void send(text)));
     // 窗口形态以宿主为准。先订阅再取当前值，两者之间不会漏掉变更。
     track(onModeChanged(applyHostMode));

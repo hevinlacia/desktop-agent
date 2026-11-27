@@ -228,7 +228,7 @@ function createHandlers(): CommandHandlers {
     agent_set_thinking_level: ({ level }) => agent.setThinkingLevel(level),
     agent_extension_ui_response: ({ response }) => agent.respondExtensionUi(response),
     agent_sessions: () => agent.sessions(),
-    agent_sessions_all: () => agent.sessionsAll(),
+    agent_sessions_all: ({ cwds }) => agent.sessionsAll(cwds),
     agent_commands: () => agent.commands(),
     agent_models: () => agent.models(),
     window_hide: () => hideWindow(),

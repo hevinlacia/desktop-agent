@@ -81,15 +81,22 @@ export function SessionGroups({ compact }: Props) {
 
   const group = state ? activeGroup(state) : undefined;
   const openPaths = state && group ? (state.openSessions[group.id] ?? []) : [];
+  /** 分组目录 key：历史会话只扫现有分组的目录（不再全局扫描，REQ-346 修复轮二）。 */
+  const groupCwdsKey = state ? state.groups.map((g) => g.path).sort().join("|") : "";
 
   const reloadSessions = useCallback(async () => {
-    setAllSessions(await agentClient.sessionsAll().catch(() => [] as SessionSummary[]));
-  }, []);
+    if (!groupCwdsKey) return;
+    const cwds = groupCwdsKey.split("|");
+    setAllSessions(await agentClient.sessionsAll(cwds).catch(() => [] as SessionSummary[]));
+  }, [groupCwdsKey]);
 
-  // 切分组 / 新会话落盘后列表要跟着变。
+  // 历史会话按需加载（REQ-346 修复轮二）：全局/全量扫描成本高，只在面板真正可见
+  // （展开或搜索自动展开）时才拉；切换、新建、普通浏览零调用，不拖累切换。
   useEffect(() => {
+    if (compact) return;
+    if (!historyOpen && !query.trim()) return;
     void reloadSessions();
-  }, [reloadSessions, group?.id, currentFile]);
+  }, [reloadSessions, compact, historyOpen, query]);
 
   /**
    * 把分组状态写回配置（不动 cwd 时不触发 Agent 重启）。

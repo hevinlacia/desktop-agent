@@ -79,7 +79,8 @@ export const agentClient = {
     call("agent_extension_ui_response", { response }),
   sessions: () => call("agent_sessions"),
   /** 跨所有工作目录的会话（历史会话用）。 */
-  sessionsAll: () => call("agent_sessions_all"),
+  /** 历史会话（REQ-346 修复轮二）：只扫现有分组的目录。 */
+  sessionsAll: (cwds: string[]) => call("agent_sessions_all", { cwds }),
   /** 斜杠命令联想用的命令列表（扩展命令 / prompt 模板 / skill）。 */
   commands: () => call("agent_commands"),
   /** 切换模型用的可选列表（当前有可用凭据的模型）。 */

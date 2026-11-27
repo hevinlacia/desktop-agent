@@ -100,8 +100,8 @@ export interface CommandIO {
   agent_earlier_messages: { args: { fromEnd: number; count: number }; result: EarlierMessagesResult };
   agent_extension_ui_response: { args: { response: ExtensionUiResponse }; result: void };
   agent_sessions: { args: null; result: SessionSummary[] };
-  /** 跨所有工作目录的会话（历史会话不绑定 cwd）。 */
-  agent_sessions_all: { args: null; result: SessionSummary[] };
+  /** 历史会话（REQ-346 修复轮二）：只扫现有分组的目录，不再全局扫描。 */
+  agent_sessions_all: { args: { cwds: string[] }; result: SessionSummary[] };
   /** 斜杠命令联想用的命令列表。 */
   agent_commands: { args: null; result: SlashCommand[] };
   /** 切换模型用的可选列表：当前有可用凭据的模型。 */

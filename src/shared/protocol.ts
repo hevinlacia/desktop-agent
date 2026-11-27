@@ -112,6 +112,20 @@ export interface SessionState {
   isStreaming: boolean;
   isCompacting: boolean;
   messages: ChatMessage[];
+  /**
+   * 会话里实际的消息总数（REQ-346）：`messages` 只带最近一页（首屏渲染不冻结），
+   * 更早的用 `agent_earlier_messages` 按页拉。
+   */
+  messagesTotal: number;
+}
+
+/** `agent_earlier_messages` 的返回：从尾部往前数的第 `fromEnd + 1` 页更早的消息。 */
+export interface EarlierMessagesResult {
+  messages: ChatMessage[];
+  /** 再往前还有没有。 */
+  hasMore: boolean;
+  /** 会话消息总数（校对用）。 */
+  total: number;
 }
 
 /**
@@ -201,6 +215,13 @@ export interface AppConfig {
   activeGroupId: string | null;
   /** 每个分组「打开」的会话（session 文件路径，最近活跃在前）；不在清单里的进历史会话。 */
   openSessions: Record<string, string[]>;
+  /**
+   * 会话常驻池大小（REQ-346）：最近用过的会话各持一个完整运行时驻留后台，池内切换瞬时。
+   * 内存代价与池大小成正比，闲置挂起负责实际占用收敛。
+   */
+  sessionPoolSize: number;
+  /** 闲置挂起分钟数：池内会话超过这个时长未使用就释放运行时（0 = 不挂起）。回切走一次冷加载。 */
+  sessionIdleSuspendMinutes: number;
 }
 
 /** 会话分组：一个工作目录。 */
@@ -211,6 +232,9 @@ export interface SessionGroup {
   /** 展示名，默认取目录名。 */
   label: string;
 }
+
+/** state / 往前翻页的每页消息条数（REQ-346）：大会话全量过 IPC + 全量渲染是切换卡顿的另一半根因。 */
+export const SESSION_MESSAGES_PAGE = 200;
 
 /** 右侧信息栏展示的一条需求摘要（来自 Agent Panel）。 */
 export interface PanelRequirement {

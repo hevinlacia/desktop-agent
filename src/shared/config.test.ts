@@ -79,3 +79,27 @@ describe("normalizeAccelerator", () => {
     expect(normalizeAccelerator("CommandOrControl+Alt+A")).toBe("CommandOrControl+Alt+A");
   });
 });
+
+describe("会话常驻池配置（REQ-346）", () => {
+  it("缺省时池大小=10、闲置挂起=10 分钟", () => {
+    const cfg = resolveConfig(null, "/home/u");
+    expect(cfg.sessionPoolSize).toBe(10);
+    expect(cfg.sessionIdleSuspendMinutes).toBe(10);
+  });
+
+  it("合法值原样保留；非法/越界回默认或夹取", () => {
+    const ok = resolveConfig({ sessionPoolSize: 20, sessionIdleSuspendMinutes: 30 }, "/home/u");
+    expect(ok.sessionPoolSize).toBe(20);
+    expect(ok.sessionIdleSuspendMinutes).toBe(30);
+
+    const small = resolveConfig({ sessionPoolSize: 0 }, "/home/u");
+    expect(small.sessionPoolSize).toBe(10); // 低于下限 → 默认 10（num 语义：越界用 fallback）
+
+    const zero = resolveConfig({ sessionIdleSuspendMinutes: 0 }, "/home/u");
+    expect(zero.sessionIdleSuspendMinutes).toBe(0); // 0 = 不挂起，合法
+
+    const junk = resolveConfig({ sessionPoolSize: "很多", sessionIdleSuspendMinutes: -5 }, "/home/u");
+    expect(junk.sessionPoolSize).toBe(10);
+    expect(junk.sessionIdleSuspendMinutes).toBe(10);
+  });
+});

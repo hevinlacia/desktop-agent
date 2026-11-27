@@ -218,6 +218,8 @@ function createHandlers(): CommandHandlers {
     agent_abort: () => agent.abort(),
     agent_new_session: () => agent.newSession(),
     agent_switch_session: ({ sessionPath }) => agent.switchSession(sessionPath),
+    agent_set_pool_config: ({ poolSize, idleSuspendMs }) => agent.setPoolConfig(poolSize, idleSuspendMs),
+    agent_earlier_messages: ({ fromEnd, count }) => agent.earlierMessages(fromEnd, count),
     agent_stats: () => agent.stats(),
     agent_set_model: async ({ provider, modelId }) => {
       await agent.setModel(provider, modelId);
@@ -301,6 +303,14 @@ function applyConfig(next: AppConfig): AppConfig {
     void agent
       .restart(agentOptions(saved))
       .catch((err: unknown) => sendBootError(`Agent 重启失败：${errorMessage(err)}`));
+  } else if (
+    saved.sessionPoolSize !== prev.sessionPoolSize ||
+    saved.sessionIdleSuspendMinutes !== prev.sessionIdleSuspendMinutes
+  ) {
+    // 池参数热生效（REQ-346）：不需要重启，直接推给 Agent 子进程。
+    void agent
+      .setPoolConfig(saved.sessionPoolSize, saved.sessionIdleSuspendMinutes * 60_000)
+      .catch((err: unknown) => sendBootError(`会话池参数下发失败：${errorMessage(err)}`));
   }
   return saved;
 }
@@ -325,7 +335,14 @@ function rememberModel(provider: string, modelId: string): void {
 function agentOptions(cfg: AppConfig): AgentInitOptions {
   // 自检模式下会话不落盘：测试提问不能在 pi 的会话目录里留下文件。
   const persistSession = process.env.DESKTOP_AGENT_SELFTEST ? false : cfg.persistSession;
-  return { cwd: cfg.cwd, persistSession, extensions: cfg.extensions, lastModel: cfg.lastModel };
+  return {
+    cwd: cfg.cwd,
+    persistSession,
+    extensions: cfg.extensions,
+    lastModel: cfg.lastModel,
+    sessionPoolSize: cfg.sessionPoolSize,
+    sessionIdleSuspendMs: cfg.sessionIdleSuspendMinutes * 60_000,
+  };
 }
 
 function errorMessage(err: unknown): string {

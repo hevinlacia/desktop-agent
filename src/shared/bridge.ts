@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   AppConfig,
+  EarlierMessagesResult,
   ExtensionUiResponse,
   ModelInfo,
   NewSessionResult,
@@ -57,6 +58,8 @@ export const COMMANDS = [
   "agent_abort",
   "agent_new_session",
   "agent_switch_session",
+  "agent_set_pool_config",
+  "agent_earlier_messages",
   "agent_stats",
   "agent_set_model",
   "agent_set_thinking_level",
@@ -91,6 +94,10 @@ export interface CommandIO {
   agent_stats: { args: null; result: SessionStats };
   agent_set_model: { args: { provider: string; modelId: string }; result: void };
   agent_set_thinking_level: { args: { level: string }; result: void };
+  /** 调整会话常驻池参数（设置页保存后主进程推送，不重启 Agent）。 */
+  agent_set_pool_config: { args: { poolSize: number; idleSuspendMs: number }; result: void };
+  /** 会话消息往前翻页（REQ-346 首屏只渲染最近一页）。 */
+  agent_earlier_messages: { args: { fromEnd: number; count: number }; result: EarlierMessagesResult };
   agent_extension_ui_response: { args: { response: ExtensionUiResponse }; result: void };
   agent_sessions: { args: null; result: SessionSummary[] };
   /** 跨所有工作目录的会话（历史会话不绑定 cwd）。 */

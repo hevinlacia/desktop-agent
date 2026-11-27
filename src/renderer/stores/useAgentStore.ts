@@ -10,6 +10,7 @@
 import { create } from "zustand";
 import type {
   AgentEvent,
+  AppConfig,
   ChatMessage,
   ContentBlock,
   ExtensionUiRequest,
@@ -21,7 +22,7 @@ import type {
 } from "@shared/protocol";
 import { agentClient, cachedCommands, configClient, windowClient } from "@/services/agentClient";
 import { ensureGroups, openSession } from "@shared/session-groups";
-import type { AppConfig } from "@shared/protocol";
+import { SESSION_MESSAGES_PAGE } from "@shared/protocol";
 
 /** 悬浮窗展开会话侧边栏时的窗口高度（逻辑像素）：表头 + 约 8 行会话。 */
 export const COMPACT_SIDEBAR_WINDOW_HEIGHT = 420;
@@ -53,6 +54,12 @@ interface AgentStore {
   model: ModelInfo | null;
   thinkingLevel: string;
   messages: ChatMessage[];
+  /** 更早的消息（「加载更早」往前翻页累积，REQ-346）；state 只带最近一页。 */
+  olderMessages: ChatMessage[];
+  /** 更早还有没有消息。 */
+  hasOlder: boolean;
+  /** 正在拉更早的消息。 */
+  loadingOlder: boolean;
   stats: SessionStats | null;
   lastUsage: Usage | null;
 
@@ -84,6 +91,8 @@ interface AgentStore {
   abort: () => Promise<void>;
   newSession: () => Promise<void>;
   switchSession: (path: string) => Promise<void>;
+  /** 往前翻一页更早的消息（REQ-346：大会话首屏只渲染最近一页）。 */
+  loadEarlier: () => Promise<void>;
   /** 重新取一次会话状态并 hydrate（扩展发起的切换、外部改动后用）。 */
   refreshSession: () => Promise<void>;
   restoreAfterRestart: () => Promise<void>;
@@ -115,9 +124,12 @@ interface AgentStore {
 
 const EMPTY: Pick<
   AgentStore,
-  "messages" | "live" | "toolExec" | "lastUsage" | "stats" | "extensionUi"
+  "messages" | "olderMessages" | "hasOlder" | "loadingOlder" | "live" | "toolExec" | "lastUsage" | "stats" | "extensionUi"
 > = {
   messages: [],
+  olderMessages: [],
+  hasOlder: false,
+  loadingOlder: false,
   live: [],
   toolExec: {},
   lastUsage: null,
@@ -160,6 +172,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   bootError: null,
   config: null,
   ready: false,
+  olderMessages: [],
+  hasOlder: false,
+  loadingOlder: false,
 
   async bootstrap() {
     try {
@@ -468,6 +483,21 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set(hydrate(state));
   },
 
+  async loadEarlier() {
+    const { hasOlder, loadingOlder } = get();
+    if (!hasOlder || loadingOlder) return;
+    set({ loadingOlder: true });
+    try {
+      const fromEnd = get().olderMessages.length + get().messages.length;
+      const res = await agentClient.earlierMessages(fromEnd, SESSION_MESSAGES_PAGE);
+      set((s) => ({ olderMessages: [...res.messages, ...s.olderMessages], hasOlder: res.hasMore }));
+    } catch (e) {
+      set((s) => ({ messages: [...s.messages, notice(errText(e), "error")] }));
+    } finally {
+      set({ loadingOlder: false });
+    }
+  },
+
   /**
    * Agent 重启后（改 extensions、空分组首次新建等）恢复现场。
    * 只做「新建会话」：切分组已改为不重启（pi 会跟随会话自己的 cwd）。
@@ -704,6 +734,10 @@ function hydrate(state: SessionState): Partial<AgentStore> {
     model: state.model,
     thinkingLevel: state.thinkingLevel,
     messages: state.messages,
+    // 会话切换/刷新后翻页状态重置（REQ-346）：新页从 state 带来的最近一页重新算。
+    olderMessages: [],
+    hasOlder: state.messagesTotal > state.messages.length,
+    loadingOlder: false,
     running: state.isStreaming,
     compacting: state.isCompacting,
     live: [],

@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  EarlierMessagesResult,
   ExtensionUiResponse,
   ModelInfo,
   ModelRef,
@@ -22,6 +23,10 @@ export interface AgentInitOptions {
   extensions: boolean;
   /** 上个会话使用的模型：启动时的新会话与之后新建的会话沿用。 */
   lastModel: ModelRef | null;
+  /** 会话常驻池大小（REQ-346）：最近用过的会话各持一个运行时，池内切换瞬时。 */
+  sessionPoolSize: number;
+  /** 闲置挂起毫秒数：超过就释放池内会话的运行时（0 = 不挂起）。 */
+  sessionIdleSuspendMs: number;
 }
 
 export type LogLevel = "info" | "warn" | "error";
@@ -42,6 +47,8 @@ export type AgentRequest =
   | { id: number; cmd: "stats" }
   | { id: number; cmd: "setModel"; provider: string; modelId: string }
   | { id: number; cmd: "setThinkingLevel"; level: string }
+  | { id: number; cmd: "setPoolConfig"; poolSize: number; idleSuspendMs: number }
+  | { id: number; cmd: "earlierMessages"; fromEnd: number; count: number }
   | { id: number; cmd: "extensionUiResponse"; response: ExtensionUiResponse }
   | { id: number; cmd: "shutdown" };
 
@@ -59,6 +66,8 @@ export interface AgentReplies {
   stats: SessionStats;
   setModel: null;
   setThinkingLevel: null;
+  setPoolConfig: null;
+  earlierMessages: EarlierMessagesResult;
   extensionUiResponse: null;
   shutdown: null;
 }

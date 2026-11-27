@@ -84,6 +84,8 @@ export const agentClient = {
   commands: () => call("agent_commands"),
   /** 切换模型用的可选列表（当前有可用凭据的模型）。 */
   models: () => call("agent_models"),
+  /** 往前翻页拿更早的消息（REQ-346 首屏只渲染最近一页）。 */
+  earlierMessages: (fromEnd: number, count: number) => call("agent_earlier_messages", { fromEnd, count }),
   /** 当前会话绑定的 Agent Panel 需求（右侧信息栏）。 */
   panelRequirements: (sessionId: string | null) => call("panel_requirements", { sessionId }),
 };

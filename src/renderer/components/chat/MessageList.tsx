@@ -12,6 +12,10 @@ import { Loader2, Sparkles } from "lucide-react";
  */
 export function MessageList() {
   const messages = useAgentStore((s) => s.messages);
+  const olderMessages = useAgentStore((s) => s.olderMessages);
+  const hasOlder = useAgentStore((s) => s.hasOlder);
+  const loadingOlder = useAgentStore((s) => s.loadingOlder);
+  const loadEarlier = useAgentStore((s) => s.loadEarlier);
   const live = useAgentStore((s) => s.live);
   const running = useAgentStore((s) => s.running);
   const commandRunning = useAgentStore((s) => s.commandRunning);
@@ -27,12 +31,24 @@ export function MessageList() {
 
   const liveBlocks = liveToBlocks(live);
   const hasLive = liveBlocks.length > 0;
+  // 首屏只有最近一页（REQ-346）：更早的按页往前拼，渲染与流式互不干扰。
+  const all = [...olderMessages, ...messages];
 
   return (
     <div className="flex-1 overflow-y-auto scroll-thin px-3 py-2">
-      {messages.length === 0 && !hasLive && <EmptyState />}
+      {messages.length === 0 && !hasLive && olderMessages.length === 0 && <EmptyState />}
 
-      {messages.map((m, i) => (
+      {hasOlder && (
+        <button
+          type="button"
+          onClick={() => void loadEarlier()}
+          className="mx-auto mb-1 block rounded border border-border-subtle px-2 py-0.5 text-[10.5px] text-ink-muted transition hover:bg-surface-raised hover:text-ink"
+        >
+          {loadingOlder ? "加载中…" : "加载更早的消息"}
+        </button>
+      )}
+
+      {all.map((m, i) => (
         <MessageBubble key={`${m.timestamp}-${i}`} message={m} toolExec={toolExec} />
       ))}
 

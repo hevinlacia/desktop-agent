@@ -309,6 +309,34 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
                   className="mt-1 w-full rounded-md border border-border-subtle bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-accent/60"
                 />
               </label>
+              <label className="mt-2 block text-[11px] text-ink-muted">
+                会话常驻池大小（REQ-346）
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={draft.sessionPoolSize}
+                  onChange={(e) => setDraft({ ...draft, sessionPoolSize: Number(e.target.value) })}
+                  className="mt-1 w-full rounded-md border border-border-subtle bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-accent/60"
+                />
+                <span className="mt-1 block text-[10px] leading-snug text-ink-muted/60">
+                  最近用过的会话各驻留一个完整运行时，池内切换瞬时（不重建）；代价是内存。保存立即生效。
+                </span>
+              </label>
+              <label className="mt-2 block text-[11px] text-ink-muted">
+                闲置挂起（分钟，0 = 不挂起）
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={draft.sessionIdleSuspendMinutes}
+                  onChange={(e) => setDraft({ ...draft, sessionIdleSuspendMinutes: Number(e.target.value) })}
+                  className="mt-1 w-full rounded-md border border-border-subtle bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-accent/60"
+                />
+                <span className="mt-1 block text-[10px] leading-snug text-ink-muted/60">
+                  超过这个时长没使用的常驻会话会释放运行时；再切回去会重新加载一次。
+                </span>
+              </label>
             </Group>
           </>
         )}

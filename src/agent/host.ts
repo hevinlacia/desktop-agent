@@ -173,7 +173,8 @@ export class AgentHost {
       case "newSession": {
         const result = await this.newSession();
         if (result.cancelled) throw new Error("新会话被扩展取消");
-        return null;
+        // 契约（REQ-344 ②）：直接回新会话文件，登记不靠事后扫盘/猜时序。
+        return { sessionFile: this.session.sessionFile ?? null };
       }
       case "switchSession": {
         const result = await this.runtime.switchSession(req.sessionPath);

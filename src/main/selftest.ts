@@ -32,8 +32,10 @@ type AssistantMessage = Extract<ChatMessage, { role: "assistant" }>;
 interface LayoutProbe {
   sidebarWidth: number;
   hasInput: boolean;
-  /** 会话列表里已渲染的行数。 */
+  /** 会话列表里已渲染的行数（打开的会话 + 历史，REQ-341 后历史默认收起所以冷启动常为 0）。 */
   sessionRows: number;
+  /** 历史会话计数标签渲染的数字（REQ-341 后冷启动下它是「列表拿到 agent 数据」的信号）。 */
+  historyCount: number;
   /** 消息区里 assistant / user 气泡的数量、文字。 */
   assistantCount: number;
   userTexts: string[];
@@ -100,11 +102,13 @@ export async function runSelfTest(ctx: SelfTestContext, outDir: string): Promise
       .length;
     const sessionCount = report.sessionCount as number;
 
-    // 2) 完整形态：侧边栏展开、输入框存在（说明 React 已挂载）、会话列表渲染出行
+    // 2) 完整形态：侧边栏展开、输入框存在（说明 React 已挂载）、会话数据渲染出来。
+    //    REQ-341 后冷启动没有「打开的会话」且历史默认收起，所以拿到 agent 数据的信号是
+    //    历史计数标签（historyCount）或已渲染的会话行（新建会话之后才有）。
     ctx.switchMode("full");
     const full = await waitFor(
       ctx.win,
-      (p) => p.hasInput && (sessionCount === 0 || p.sessionRows > 0),
+      (p) => p.hasInput && (sessionCount === 0 || p.sessionRows > 0 || p.historyCount > 0),
       8_000,
     );
     report.full = { layout: full, windowSize: sizeOf(ctx.win) };
@@ -112,8 +116,8 @@ export async function runSelfTest(ctx: SelfTestContext, outDir: string): Promise
     await snapshot(ctx.win, outDir, "1-full.png");
     if (!full.hasInput) throw new Error("完整形态下没有输入框：渲染进程可能没有启动");
     assertWidth("完整形态", full.sidebarWidth, FULL_SIDEBAR_WIDTH);
-    if (sessionCount > 0 && full.sessionRows === 0) {
-      throw new Error(`会话列表为空：Agent 报告有 ${sessionCount} 个会话，但列表没有渲染出任何一行`);
+    if (sessionCount > 0 && full.sessionRows === 0 && full.historyCount === 0) {
+      throw new Error(`会话列表为空：Agent 报告有 ${sessionCount} 个会话，但侧边栏没有渲染出任何会话数据`);
     }
 
     // 3) 宿主切到悬浮窗：渲染进程必须跟着换布局，窗口尺寸跟着变
@@ -487,7 +491,8 @@ async function probeLayout(win: BrowserWindow): Promise<LayoutProbe> {
     return {
       sidebarWidth: aside ? aside.getBoundingClientRect().width : 0,
       hasInput: !!document.querySelector("textarea"),
-      sessionRows: document.querySelectorAll("aside div.overflow-y-auto > button").length,
+      sessionRows: document.querySelectorAll("aside [data-session-row]").length,
+      historyCount: Number(document.querySelector("aside [data-history-count]")?.textContent ?? 0) || 0,
       assistantCount: document.querySelectorAll('[data-role="assistant"]').length,
       userTexts: [...document.querySelectorAll('[data-role="user"]')].map((el) => el.textContent.trim()),
       lastAssistantText: lastAssistant ? lastAssistant.textContent.trim() : "",

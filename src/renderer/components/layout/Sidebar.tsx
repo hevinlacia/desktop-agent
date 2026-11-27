@@ -94,9 +94,8 @@ export function Sidebar({ variant }: { variant: WindowMode }) {
         <span className="flex-1 text-[10.5px] font-medium uppercase tracking-wide text-ink-muted/60">
           会话
         </span>
-        <SideButton label="新建会话" onClick={() => void createSession()}>
-          <Plus size={13} />
-        </SideButton>
+        {/* 不再放「新建会话」按钮（REQ-344 ⑥）：它与分组头/标题栏的入口完全重复，
+            收起态窄栏里的按钮保留——那时它是唯一入口。 */}
         <SideButton label="收起侧边栏" onClick={toggle}>
           <PanelLeftClose size={13} />
         </SideButton>

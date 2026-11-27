@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   FolderPlus,
   History,
   MessageSquare,
+  Pencil,
   Plus,
+  Search,
+  Trash2,
   X,
 } from "lucide-react";
 import type { AppConfig, SessionGroup } from "@shared/protocol";
@@ -14,10 +18,13 @@ import {
   addGroup,
   closeSession,
   ensureGroups,
+  filterSessions,
   historyPage,
   HISTORY_PAGE_SIZE,
   historySessions,
   openSession,
+  removeGroup,
+  renameGroup,
   setActiveGroup,
   type GroupState,
 } from "@shared/session-groups";
@@ -47,9 +54,10 @@ export function SessionGroups({ compact }: Props) {
   const currentFile = useAgentStore((s) => s.sessionFile);
   const switchSession = useAgentStore((s) => s.switchSession);
   const newSession = useAgentStore((s) => s.newSession);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  /** 全局会话（历史会话不绑定 cwd，所以用跨目录列表）。 */
+  /** 全局会话（历史会话不绑定 cwd，所以用跨目录列表）。当前 cwd 列表已并入全局，不再单独拉（REQ-344 ⑥）。 */
   const [allSessions, setAllSessions] = useState<SessionSummary[]>([]);
+  /** 会话搜索词（REQ-344 ①）：过滤「打开的会话」与「历史会话」，匹配展示名 / sessionId / 文件名。 */
+  const [query, setQuery] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   // visible = 这一屏展示多少条历史会话（一页 30，点一次加一页）。
   const [visible, setVisible] = useState(HISTORY_PAGE_SIZE);
@@ -75,12 +83,7 @@ export function SessionGroups({ compact }: Props) {
   const openPaths = state && group ? (state.openSessions[group.id] ?? []) : [];
 
   const reloadSessions = useCallback(async () => {
-    const [local, all] = await Promise.all([
-      agentClient.sessions().catch(() => [] as SessionSummary[]),
-      agentClient.sessionsAll().catch(() => [] as SessionSummary[]),
-    ]);
-    setSessions(local);
-    setAllSessions(all);
+    setAllSessions(await agentClient.sessionsAll().catch(() => [] as SessionSummary[]));
   }, []);
 
   // 切分组 / 新会话落盘后列表要跟着变。
@@ -120,14 +123,13 @@ export function SessionGroups({ compact }: Props) {
   // 那条当成"文件不存在"删掉（实测表现为「会话刚出现就消失」），而且每次对账都会写配置。
   // 文件真的被删了也不致命：点开会提示错误，用户自己关掉即可。
 
-  // 名字解析用全局列表：刚新建/刚切组时当前 cwd 的列表可能还没刷新，
-  // 只查它会退化成原始文件名（`2026-11-27T02-34-...jsonl`）。
+  // 名字解析用全局列表：刚新建/刚切组时当前 cwd 的列表可能还没刷新（REQ-341 实测），
+  // 全局表覆盖所有目录，不存在这个问题。
   const info = useMemo(() => {
     const byPath = new Map<string, SessionSummary>();
     for (const s of allSessions) byPath.set(s.path, s);
-    for (const s of sessions) byPath.set(s.path, s);
     return { byPath };
-  }, [allSessions, sessions]);
+  }, [allSessions]);
 
   const labelOf = (path: string): string => {
     const hit = info.byPath.get(path);
@@ -166,19 +168,95 @@ export function SessionGroups({ compact }: Props) {
   );
 
   const createSession = useCallback(async () => {
+    // 列表刷新交给 currentFile 变化的 useEffect（REQ-344 ⑥：手动 reload 是冗余的）。
     await useAgentStore.getState().createSessionInActiveGroup();
-    await reloadSessions();
-  }, [reloadSessions]);
+  }, []);
+
+  const commitRename = useCallback(
+    async (groupId: string, label: string) => {
+      if (!state) return;
+      const next = renameGroup(state, groupId, label);
+      if (next !== state) await persist(next);
+    },
+    [state, persist],
+  );
+
+  const deleteGroup = useCallback(
+    async (groupId: string) => {
+      if (!state) return;
+      const target = state.groups.find((g) => g.id === groupId);
+      if (!target || state.groups.length <= 1) return;
+      const next = removeGroup(state, groupId);
+      await persist(next);
+      // 删的是激活分组：removeGroup 已把激活指到剩余第一个；那边有打开的会话就切过去
+      // （pi 跟随会话自己的 cwd，不重启），没有就提示用户「新建会话会以该目录启动」。
+      if (state.activeGroupId === groupId && next.activeGroupId) {
+        const first = next.openSessions[next.activeGroupId]?.[0];
+        if (first) {
+          await switchSession(first);
+        } else {
+          const label = next.groups.find((g) => g.id === next.activeGroupId)?.label ?? "";
+          useAgentStore
+            .getState()
+            .pushNotice(`已删除分组「${target.label}」，切到「${label}」：点「新建会话」会以该目录启动（Agent 重启一次）`);
+        }
+      }
+    },
+    [state, persist, switchSession],
+  );
 
   if (!state) return null;
 
   // 历史会话是全局的（跨所有工作目录），排除任何分组里还开着的那些。
   const openedEverywhere = state.groups.flatMap((g) => state.openSessions[g.id] ?? []);
   const historyAll = historySessions(allSessions, openedEverywhere);
-  const page = historyPage(historyAll, visible);
+
+  // 搜索（REQ-344 ①）：打开列表用展示名匹配；历史列表先过滤再分页，
+  // 搜索态不分页（一次给全，头部显命中数、隐藏「加载更多」）。
+  const searching = query.trim().length > 0;
+  const openItems = openPaths.map((path) => ({
+    path,
+    name: labelOf(path),
+    rawName: info.byPath.get(path)?.name,
+    sessionId: info.byPath.get(path)?.sessionId,
+  }));
+  const filteredOpen = filterSessions(openItems, query);
+  const filteredHistory = filterSessions(historyAll, query);
+  const page = historyPage(searching ? filteredHistory : historyAll, searching ? filteredHistory.length : visible);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {/* 搜索（REQ-344 ①）：Esc 只清词不收窗（stopPropagation 隔开全局快捷键）。 */}
+      <div className="shrink-0 px-1.5 pb-1">
+        <div className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-1.5 py-0.5">
+          <Search size={11} className="shrink-0 text-ink-muted/50" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") {
+                setQuery("");
+                e.currentTarget.blur();
+              }
+            }}
+            placeholder="搜索会话…"
+            spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent text-[11px] text-ink outline-none placeholder:text-ink-muted/40"
+          />
+          {searching && (
+            <button
+              type="button"
+              title="清空搜索"
+              onClick={() => setQuery("")}
+              className="shrink-0 rounded p-0.5 text-ink-muted/60 transition hover:bg-surface-raised hover:text-ink"
+            >
+              <X size={10} />
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* 分组切换 */}
       <div className="shrink-0 px-1.5 pb-1">
         <div className="mb-1 flex items-center justify-between px-1">
@@ -236,11 +314,14 @@ export function SessionGroups({ compact }: Props) {
               group={g}
               active={g.id === state.activeGroupId}
               count={(state.openSessions[g.id] ?? []).length}
+              canDelete={state.groups.length > 1}
               onPick={() =>
                 void switchGroup(state, g, persist, state.openSessions[g.id] ?? [], switchSession, (msg) =>
                   useAgentStore.getState().pushNotice(msg),
                 )
               }
+              onRename={(label) => void commitRename(g.id, label)}
+              onDelete={() => void deleteGroup(g.id)}
             />
           ))}
         </div>
@@ -262,17 +343,17 @@ export function SessionGroups({ compact }: Props) {
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto scroll-thin px-1.5">
-          {openPaths.length === 0 && (
+          {filteredOpen.length === 0 && (
             <div className="px-2 py-2 text-[11px] leading-relaxed text-ink-muted/60">
-              还没有打开的会话
+              {searching ? "没有匹配的会话" : "还没有打开的会话"}
             </div>
           )}
-          {openPaths.map((path) => (
+          {filteredOpen.map(({ path, name, rawName }) => (
             <SessionRow
               key={path}
-              label={labelOf(path)}
+              label={name}
               active={path === currentFile}
-              subtitle={info.byPath.get(path)?.name ? labelOf(path) : undefined}
+              subtitle={rawName ? name : undefined}
               onOpen={() => void openInApp(path)}
               onClose={() => void closeInApp(path)}
             />
@@ -291,12 +372,16 @@ export function SessionGroups({ compact }: Props) {
             {historyOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
             <History size={11} />
             <span className="flex-1 text-left">历史会话</span>
-            <span className="text-[10px] tabular-nums text-ink-muted/60">{historyAll.length}</span>
+            <span className="text-[10px] tabular-nums text-ink-muted/60" data-history-count>
+              {searching ? filteredHistory.length : historyAll.length}
+            </span>
           </button>
-          {historyOpen && (
+          {(historyOpen || searching) && (
             <div className="mt-1 max-h-56 overflow-y-auto scroll-thin">
               {page.items.length === 0 && (
-                <div className="px-2 py-1.5 text-[11px] text-ink-muted/60">没有已关闭的会话</div>
+                <div className="px-2 py-1.5 text-[11px] text-ink-muted/60">
+                  {searching ? "没有匹配的会话" : "没有已关闭的会话"}
+                </div>
               )}
               {page.items.map((s) => (
                 <SessionRow
@@ -378,27 +463,113 @@ function GroupRow({
   group,
   active,
   count,
+  canDelete,
   onPick,
+  onRename,
+  onDelete,
 }: {
   group: SessionGroup;
   active: boolean;
   count: number;
+  /** 分组是会话的容器，至少保留一个：删最后一个要禁止（REQ-344 ③）。 */
+  canDelete: boolean;
   onPick: () => void;
+  onRename: (label: string) => void;
+  onDelete: () => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const renameRef = useRef<HTMLInputElement>(null);
+
+  const commitRename = () => {
+    const value = renameRef.current?.value ?? "";
+    setRenaming(false);
+    onRename(value); // 空白/同名时 renameGroup 返回同一状态，父层据此跳过持久化
+  };
+
+  if (renaming) {
+    return (
+      <div className="flex items-center gap-1 rounded-md bg-accent-soft px-1.5 py-0.5">
+        <input
+          ref={renameRef}
+          autoFocus
+          defaultValue={group.label}
+          title={`${group.label}（原目录：${group.path}）`}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename();
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              setRenaming(false);
+            }
+          }}
+          onBlur={commitRename}
+          spellCheck={false}
+          className="min-w-0 flex-1 bg-transparent text-[11.5px] text-accent outline-none"
+        />
+      </div>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={onPick}
-      title={group.path}
+    <div
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition",
+        "group flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition",
         active ? "bg-accent-soft text-accent" : "text-ink hover:bg-surface-raised",
       )}
     >
-      <span className={cn("size-1.5 shrink-0 rounded-full", active ? "bg-accent" : "bg-ink-muted/30")} />
-      <span className="min-w-0 flex-1 truncate text-[11.5px]">{group.label}</span>
-      <span className="shrink-0 text-[10px] tabular-nums text-ink-muted/60">{count}</span>
-    </button>
+      <button type="button" onClick={onPick} title={group.path} className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className={cn("size-1.5 shrink-0 rounded-full", active ? "bg-accent" : "bg-ink-muted/30")} />
+        <span className="min-w-0 flex-1 truncate text-[11.5px]">{group.label}</span>
+        <span className="shrink-0 text-[10px] tabular-nums text-ink-muted/60 group-hover:hidden">{count}</span>
+      </button>
+      {/* hover 时计数换成操作（REQ-344 ③）：重命名 inline，删除两步确认，不占额外宽度 */}
+      <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+        {confirming ? (
+          <>
+            <span className="text-[9.5px] text-red-400">删除？</span>
+            <button
+              type="button"
+              title={`删除分组「${group.label}」，其中打开的会话会收进历史会话`}
+              onClick={() => {
+                setConfirming(false);
+                onDelete();
+              }}
+              className="rounded p-0.5 text-red-400 transition hover:bg-surface-sunken"
+            >
+              <Check size={11} />
+            </button>
+            <button
+              type="button"
+              title="取消"
+              onClick={() => setConfirming(false)}
+              className="rounded p-0.5 text-ink-muted transition hover:bg-surface-sunken hover:text-ink"
+            >
+              <X size={11} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              title="重命名分组"
+              onClick={() => setRenaming(true)}
+              className="rounded p-0.5 text-ink-muted transition hover:bg-surface-sunken hover:text-ink"
+            >
+              <Pencil size={11} />
+            </button>
+            <button
+              type="button"
+              title={canDelete ? "删除分组" : "至少保留一个分组"}
+              disabled={!canDelete}
+              onClick={() => setConfirming(true)}
+              className="rounded p-0.5 text-ink-muted transition hover:bg-surface-sunken hover:text-red-400 disabled:opacity-30 disabled:hover:text-ink-muted"
+            >
+              <Trash2 size={11} />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -417,6 +588,7 @@ function SessionRow({
 }) {
   return (
     <div
+      data-session-row
       className={cn(
         "group mb-0.5 flex items-center gap-1 rounded-md px-2 py-1 transition",
         active ? "bg-accent-soft" : "hover:bg-surface-raised",

@@ -16,6 +16,7 @@ export function MessageList() {
   const running = useAgentStore((s) => s.running);
   const commandRunning = useAgentStore((s) => s.commandRunning);
   const compacting = useAgentStore((s) => s.compacting);
+  const sessionBusy = useAgentStore((s) => s.sessionBusy);
   const toolExec = useAgentStore((s) => s.toolExec);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -46,7 +47,15 @@ export function MessageList() {
         </div>
       )}
 
-      {running && !hasLive && (
+      {/* 重启/恢复窗口期没有事件流：必须显式提示，否则像卡死（REQ-344 ④）。优先于「等待模型响应」。 */}
+      {sessionBusy && (
+        <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-ink-muted">
+          <Loader2 size={12} className="animate-spin" />
+          {sessionBusy === "restart" ? "正在重启 Agent…" : "正在恢复会话…"}
+        </div>
+      )}
+
+      {running && !hasLive && !sessionBusy && (
         <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-ink-muted">
           <Loader2 size={12} className="animate-spin" />
           等待模型响应…

@@ -114,6 +114,14 @@ export interface SessionState {
   messages: ChatMessage[];
 }
 
+/**
+ * `agent_new_session` 的返回（REQ-344 ②）：新会话的文件路径。
+ * 会话被扩展取消时会直接报错而不是返回；这里一般不为 null，保留兜底。
+ */
+export interface NewSessionResult {
+  sessionFile: string | null;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;

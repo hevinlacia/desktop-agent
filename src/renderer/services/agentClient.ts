@@ -45,9 +45,9 @@ export function onExternalAsk(handler: (text: string) => void): () => void {
   return listen("external://ask", handler);
 }
 
-/** 订阅「新建会话」广播（托盘菜单触发），用于清空前端视图。 */
-export function onReset(handler: () => void): () => void {
-  return listen("agent://reset", () => handler());
+/** 订阅「新建会话/Agent 重启」广播（托盘菜单、配置变更触发）。 */
+export function onReset(handler: (payload: { sessionFile: string | null }) => void): () => void {
+  return listen("agent://reset", handler);
 }
 
 /** 订阅启动期/运行期的宿主告警（例如快捷键注册失败、Agent 重启）。 */

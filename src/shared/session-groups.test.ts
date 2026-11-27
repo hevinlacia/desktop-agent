@@ -3,6 +3,7 @@ import {
   addGroup,
   closeSession,
   ensureGroups,
+  filterSessions,
   historyPage,
   historySessions,
   HISTORY_PAGE_SIZE,
@@ -10,6 +11,7 @@ import {
   openSession,
   pruneMissing,
   removeGroup,
+  renameGroup,
   setActiveGroup,
   type GroupState,
 } from "./session-groups";
@@ -108,6 +110,55 @@ describe("pruneMissing", () => {
   it("都在时返回原对象（不制造无谓重渲染）", () => {
     const state = base();
     expect(pruneMissing(state, "wms-1", () => true)).toBe(state);
+  });
+});
+
+describe("renameGroup", () => {
+  it("只改 label，id 与 path 不变（id 是 openSessions 的 key）", () => {
+    const next = renameGroup(base(), "wms-1", "  云仓新名字  ");
+    const hit = next.groups.find((g) => g.id === "wms-1");
+    expect(hit?.label).toBe("云仓新名字");
+    expect(hit?.path).toBe("/home/u/Developer/company/云仓-WMS");
+    expect(next.openSessions).toEqual(base().openSessions);
+  });
+
+  it("空白 label 与同名重命名都不产生新状态", () => {
+    const state = base();
+    expect(renameGroup(state, "wms-1", "   ")).toBe(state);
+    expect(renameGroup(state, "wms-1", "云仓-WMS")).toBe(state);
+    expect(renameGroup(state, "不存在", "x")).toBe(state);
+  });
+});
+
+describe("filterSessions", () => {
+  const list = [
+    { path: "/s/2026-11-27T02-34-10-457Z_aaa.jsonl", name: "修复登录超时", sessionId: "session-aaa" },
+    { path: "/s/2026-11-27T03-00-00-000Z_bbb.jsonl", name: "REQ-344 搜索框", sessionId: "session-bbb" },
+    { path: "/other/2026-11-26_ccc.jsonl", sessionId: "session-ccc" },
+  ];
+
+  it("空查询 / 纯空白原样返回同一数组", () => {
+    expect(filterSessions(list, "")).toBe(list);
+    expect(filterSessions(list, "  ")).toBe(list);
+  });
+
+  it("按 name 匹配，大小写不敏感", () => {
+    expect(filterSessions(list, "搜索框")).toHaveLength(1);
+    expect(filterSessions(list, "req-344")).toHaveLength(1);
+  });
+
+  it("按 sessionId 片段匹配", () => {
+    expect(filterSessions(list, "ccc")).toHaveLength(1);
+    expect(filterSessions(list, "SESSION-CCC")).toHaveLength(1);
+  });
+
+  it("无 name 时按文件名匹配", () => {
+    expect(filterSessions(list, "2026-11-26")).toHaveLength(1);
+  });
+
+  it("无命中返回空数组；先 trim 再比", () => {
+    expect(filterSessions(list, "不存在的东西")).toEqual([]);
+    expect(filterSessions(list, " 搜索框 ")).toHaveLength(1);
   });
 });
 

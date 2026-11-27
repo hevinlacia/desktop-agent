@@ -11,6 +11,7 @@ import type {
   AgentEvent,
   ExtensionUiResponse,
   ModelInfo,
+  NewSessionResult,
   PromptOutcome,
   SessionState,
   SessionStats,
@@ -216,7 +217,7 @@ export class AgentProcess {
   }
 
   newSession() {
-    return this.send<void>((id) => ({ id, cmd: "newSession" }));
+    return this.send<NewSessionResult>((id) => ({ id, cmd: "newSession" }));
   }
 
   switchSession(sessionPath: string) {

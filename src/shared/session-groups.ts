@@ -81,6 +81,18 @@ export function removeGroup(state: GroupState, groupId: string): GroupState {
   return { groups, activeGroupId, openSessions };
 }
 
+/** 重命名分组：只改 label（id 与 path 不变——id 是 openSessions 的 key，改了会丢清单）。 */
+export function renameGroup(state: GroupState, groupId: string, label: string): GroupState {
+  const trimmed = label.trim();
+  if (!trimmed) return state;
+  const hit = state.groups.find((g) => g.id === groupId);
+  if (!hit || hit.label === trimmed) return state;
+  return {
+    ...state,
+    groups: state.groups.map((g) => (g.id === groupId ? { ...g, label: trimmed } : g)),
+  };
+}
+
 export function setActiveGroup(state: GroupState, groupId: string): GroupState {
   if (!state.groups.some((g) => g.id === groupId)) return state;
   return { ...state, activeGroupId: groupId };
@@ -123,6 +135,32 @@ export function historySessions<T extends { path: string; modifiedMs?: number }>
   return all
     .filter((s) => !opened.has(s.path))
     .sort((a, b) => (b.modifiedMs ?? 0) - (a.modifiedMs ?? 0));
+}
+
+/**
+ * 会话搜索：匹配 name / sessionId / 文件名片段，大小写不敏感；query 空 = 原样返回（同一数组）。
+ * 「打开的会话」与「历史会话」共用（REQ-344 ①）：前者把路径解析成展示名后当 name 传入。
+ */
+export interface SessionSearchable {
+  path: string;
+  sessionId?: string;
+  /** 展示名；兼容 SessionSummary 的 null（无名字时退文件名匹配）。 */
+  name?: string | null;
+}
+
+export function filterSessions<T extends SessionSearchable>(list: T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((s) => matchesSession(s, q));
+}
+
+function matchesSession(s: SessionSearchable, q: string): boolean {
+  const file = s.path.split(/[\\/]/).pop() ?? s.path;
+  return (
+    (s.name ?? "").toLowerCase().includes(q) ||
+    (s.sessionId ?? "").toLowerCase().includes(q) ||
+    file.toLowerCase().includes(q)
+  );
 }
 
 export interface HistoryPage<T> {

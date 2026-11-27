@@ -18,7 +18,6 @@ import {
   HISTORY_PAGE_SIZE,
   historySessions,
   openSession,
-  pruneMissing,
   setActiveGroup,
   type GroupState,
 } from "@shared/session-groups";
@@ -117,22 +116,27 @@ export function SessionGroups({ compact }: Props) {
     [saveConfig],
   );
 
-  // 启动对账：打开的会话文件被删了就别再展示（只处理当前分组，避免误删）。
-  useEffect(() => {
-    if (!state || !group) return;
-    const cleaned = pruneMissing(state, group.id, (path) => sessions.some((s) => s.path === path));
-    // 会话还没加载完时 sessions 为空，别把清单清空：只在有数据时对账。
-    if (sessions.length > 0 && cleaned !== state) void persist(cleaned);
-  }, [state, group, sessions, persist]);
+  // 不做「按磁盘列表自动清理」：新建会话的文件落盘晚于列表刷新，自动对账会把刚建的
+  // 那条当成"文件不存在"删掉（实测表现为「会话刚出现就消失」），而且每次对账都会写配置。
+  // 文件真的被删了也不致命：点开会提示错误，用户自己关掉即可。
 
+  // 名字解析用全局列表：刚新建/刚切组时当前 cwd 的列表可能还没刷新，
+  // 只查它会退化成原始文件名（`2026-11-27T02-34-...jsonl`）。
   const info = useMemo(() => {
-    const byPath = new Map(sessions.map((s) => [s.path, s]));
+    const byPath = new Map<string, SessionSummary>();
+    for (const s of allSessions) byPath.set(s.path, s);
+    for (const s of sessions) byPath.set(s.path, s);
     return { byPath };
-  }, [sessions]);
+  }, [allSessions, sessions]);
 
   const labelOf = (path: string): string => {
     const hit = info.byPath.get(path);
-    return hit?.name || hit?.sessionId.slice(0, 8) || path.split("/").pop() || path;
+    if (hit?.name) return hit.name;
+    if (hit?.sessionId) return hit.sessionId.slice(0, 8);
+    // 兜底：从文件名里取 id 段（形如 2026-11-27T02-34-10-457Z_<id>.jsonl）。
+    const file = path.split("/").pop() ?? path;
+    const id = file.replace(/\.jsonl$/, "").split("_").pop() ?? file;
+    return id.slice(0, 8);
   };
 
   const openInApp = useCallback(

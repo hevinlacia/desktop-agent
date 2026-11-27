@@ -98,6 +98,8 @@ interface AgentStore {
   pushNotice: (text: string) => void;
   /** 把当前会话登记到激活分组的「打开」清单（新会话、重启后恢复都走它）。 */
   registerCurrentSession: () => Promise<void>;
+  /** 把指定会话文件登记进激活分组（newSession 拿到 state 后直接调）。 */
+  registerSessionFile: (file: string) => Promise<void>;
   /**
    * 在激活分组里新建会话（侧边栏按钮与分组头共用）。
    * 空分组且目录与当前 runtime cwd 不同时，先以该目录启动一次（只有这种情况要重启）。
@@ -451,6 +453,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     await agentClient.newSession();
     const state = await agentClient.state();
     set(hydrate(state));
+    // 新会话的文件就在这次 state 里：直接登记，不靠事后轮询猜时序。
+    if (state.sessionFile) await get().registerSessionFile(state.sessionFile);
   },
 
   async switchSession(path) {
@@ -592,9 +596,12 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   async registerCurrentSession() {
+    const file = get().sessionFile ?? (await agentClient.state().catch(() => null))?.sessionFile;
+    if (file) await get().registerSessionFile(file);
+  },
+
+  async registerSessionFile(file) {
     try {
-      const file = get().sessionFile ?? (await agentClient.state()).sessionFile;
-      if (!file) return;
       const cfg = await configClient.get();
       const st = ensureGroups(
         { groups: cfg.groups, activeGroupId: cfg.activeGroupId, openSessions: cfg.openSessions },
@@ -611,7 +618,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         openSessions: next.openSessions,
       });
     } catch {
-      // 登记失败不影响当前对话，下次新建/切换会再登记。
+      // 登记失败不影响当前对话；下次新建/切换会再登记。
     }
   },
 

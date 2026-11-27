@@ -81,6 +81,8 @@ interface AgentStore {
   abort: () => Promise<void>;
   newSession: () => Promise<void>;
   switchSession: (path: string) => Promise<void>;
+  /** 重新取一次会话状态并 hydrate（扩展发起的切换、外部改动后用）。 */
+  refreshSession: () => Promise<void>;
   refreshStats: () => Promise<void>;
   setMode: (mode: WindowMode) => Promise<void>;
   /** 宿主改了窗口形态：只同步状态，不回写宿主。 */
@@ -163,6 +165,22 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   applyEvent(event) {
     const current = get().sessionId;
+    // 扩展发起的会话替换：新会话 id 与当前不同，必须抢在过滤之前接住，
+    // 否则这条事件自己也会被丢掉，界面从此再也收不到任何新会话事件。
+    if (event.type === "sessionReplaced") {
+      // 刚到的界面提示（例如扩展发的「已恢复会话 …」）要保留：它们是 UI 反馈，
+      // 不属于会话内容，跟着会话重置一起清掉就再也看不到了。
+      const keepFrom = Date.now() - NOTICE_KEEP_MS;
+      set((s) => ({
+        ...EMPTY,
+        sessionId: event.sessionId,
+        running: false,
+        compacting: false,
+        messages: s.messages.filter((m) => m.role === "notice" && m.timestamp >= keepFrom),
+      }));
+      void get().refreshSession();
+      return;
+    }
     // 会话切换期间旧事件必须丢弃，否则会串到新会话视图里。
     if (event.sessionId && current && event.sessionId !== current) return;
 
@@ -431,6 +449,19 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set(hydrate(state));
   },
 
+  async refreshSession() {
+    // 只 hydrate，不清空：调用方已经按需重置（sessionReplaced 分支）。
+    try {
+      const next = hydrate(await agentClient.state());
+      // 会话替换前后产生的界面提示再贴回底部，否则刚弹出的「已恢复/已切换」看不到。
+      const keepFrom = Date.now() - NOTICE_KEEP_MS;
+      const notices = get().messages.filter((m) => m.role === "notice" && m.timestamp >= keepFrom);
+      set({ ...next, messages: [...(next.messages ?? []), ...notices] });
+    } catch (e) {
+      set((s) => ({ messages: [...s.messages, notice(errText(e), "error")] }));
+    }
+  },
+
   async refreshStats() {
     try {
       set({ stats: await agentClient.stats() });
@@ -571,6 +602,9 @@ function nextToolIndex(live: LiveBlock[]): number {
   const max = live.reduce((m, b) => Math.max(m, b.contentIndex), -1);
   return max + 1;
 }
+
+/** 扩展产出的界面提示（notice）在会话重置后仍保留这么久。 */
+const NOTICE_KEEP_MS = 15_000;
 
 function notice(text: string, level: "error" | "info" = "info"): ChatMessage {
   return { role: "notice", text, timestamp: Date.now(), ...(level === "error" ? { level } : {}) };

@@ -55,6 +55,11 @@ const userDataOverride = selfTestDir
   : process.env.DESKTOP_AGENT_USERDATA || null;
 if (userDataOverride) app.setPath("userData", userDataOverride);
 
+// 诊断开关（REQ-346）：设置端口后可让 CDP 附加到本实例（隔离 userData + 调试端口 =
+// 完全独立的可测量实例，用于定位「切换卡」这类只能真机复现的问题）。
+const remoteDebugPort = process.env.DESKTOP_AGENT_REMOTE_DEBUG_PORT;
+if (remoteDebugPort) app.commandLine.appendSwitch("remote-debugging-port", remoteDebugPort);
+
 if (!app.requestSingleInstanceLock()) {
   // 已有实例在跑：它那边会收到 second-instance 并把窗口带到前台，这里直接退出。
   app.quit();

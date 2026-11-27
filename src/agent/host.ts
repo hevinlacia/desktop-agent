@@ -184,6 +184,8 @@ export class AgentHost {
       }
       case "sessions":
         return this.sessions();
+      case "sessionsAll":
+        return await this.sessionsAll();
       case "commands":
         return this.commands();
       case "models":
@@ -251,6 +253,14 @@ export class AgentHost {
           },
         );
     });
+  }
+
+  /** 跨所有工作目录的会话：历史会话分组不绑定 cwd，所以要看全局。 */
+  private async sessionsAll(): Promise<SessionSummary[]> {
+    const list = await this.pi.SessionManager.listAll();
+    return list
+      .map((info) => toSessionSummary(info, fileSize(info.path)))
+      .sort((a, b) => b.modifiedMs - a.modifiedMs);
   }
 
   private async sessions(): Promise<SessionSummary[]> {

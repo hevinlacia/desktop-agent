@@ -187,6 +187,21 @@ export interface AppConfig {
   lastModel: ModelRef | null;
   /** Agent Panel 地址（右侧需求栏用）。空串 = 自动探测（env → 内网 → tailnet）。 */
   panelUrl: string;
+  /** 会话分组（= 工作目录）。设置页不再暴露单一「工作目录」，改由分组管理。 */
+  groups: SessionGroup[];
+  /** 当前激活的分组。会话列表、执行 cwd 都跟着它。 */
+  activeGroupId: string | null;
+  /** 每个分组「打开」的会话（session 文件路径，最近活跃在前）；不在清单里的进历史会话。 */
+  openSessions: Record<string, string[]>;
+}
+
+/** 会话分组：一个工作目录。 */
+export interface SessionGroup {
+  id: string;
+  /** 工作目录绝对路径。 */
+  path: string;
+  /** 展示名，默认取目录名。 */
+  label: string;
 }
 
 /** 右侧信息栏展示的一条需求摘要（来自 Agent Panel）。 */

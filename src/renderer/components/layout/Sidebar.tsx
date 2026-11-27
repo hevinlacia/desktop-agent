@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
-  Search,
   Settings2,
 } from "lucide-react";
-import { agentClient, configClient, type SessionSummary } from "@/services/agentClient";
 import { useAgentStore } from "@/stores/useAgentStore";
 import { cn, formatTokens } from "@/lib/utils";
+import { SessionGroups } from "./SessionGroups";
 import type { WindowMode } from "@shared/protocol";
 
 const COLLAPSE_KEY = "desktop-agent:sidebar-collapsed";
@@ -40,18 +38,11 @@ export function Sidebar({ variant }: { variant: WindowMode }) {
     const raw = Number(localStorage.getItem(WIDTH_KEY));
     return Number.isFinite(raw) && raw >= MIN_WIDTH && raw <= MAX_WIDTH ? raw : 224;
   });
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const compactOpen = useAgentStore((s) => s.compactSidebarOpen);
   const setCompactSidebarOpen = useAgentStore((s) => s.setCompactSidebarOpen);
-  const currentFile = useAgentStore((s) => s.sessionFile);
-  const sessionName = useAgentStore((s) => s.sessionName);
-  const switchSession = useAgentStore((s) => s.switchSession);
-  const newSession = useAgentStore((s) => s.newSession);
-  const setMode = useAgentStore((s) => s.setMode);
+  const createSession = useAgentStore((s) => s.createSessionInActiveGroup);
   const stats = useAgentStore((s) => s.stats);
 
   const open = compact ? compactOpen : !collapsedFull;
@@ -59,31 +50,6 @@ export function Sidebar({ variant }: { variant: WindowMode }) {
     if (compact) void setCompactSidebarOpen(!compactOpen);
     else setCollapsedFull((v) => !v);
   };
-  // 悬浮窗不显示消息流：选中会话后切到完整窗口才能看到对话。
-  const pickSession = (path: string) =>
-    void switchSession(path).then(() => (compact ? setMode("full") : undefined));
-
-  // 会话列表按需刷新：展开时 + 运行结束（新会话可能已落盘）。
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      setSessions(await agentClient.sessions());
-    } catch {
-      setSessions([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    void reload();
-  }, [open, reload, sessionName, stats?.totalMessages]);
-
-  useEffect(() => {
-    localStorage.setItem(COLLAPSE_KEY, collapsedFull ? "1" : "0");
-  }, [collapsedFull]);
-
   useEffect(() => {
     localStorage.setItem(WIDTH_KEY, String(width));
   }, [width]);
@@ -106,23 +72,13 @@ export function Sidebar({ variant }: { variant: WindowMode }) {
     document.addEventListener("mouseup", up);
   };
 
-  // 悬浮窗里没有搜索框，不能被完整窗口留下的关键词悄悄过滤。
-  const filtered =
-    compact || !query
-      ? sessions
-      : sessions.filter(
-          (s) =>
-            (s.name ?? "").toLowerCase().includes(query.toLowerCase()) ||
-            s.sessionId.includes(query),
-        );
-
   if (!open) {
     return (
       <aside className="flex w-10 shrink-0 flex-col items-center gap-1 border-r border-border-subtle bg-surface-sunken/50 py-2">
         <SideButton label="展开侧边栏" onClick={toggle}>
           <PanelLeftOpen size={14} />
         </SideButton>
-        <SideButton label="新建会话" onClick={() => void newSession()}>
+        <SideButton label="新建会话" onClick={() => void createSession()}>
           <Plus size={14} />
         </SideButton>
       </aside>
@@ -138,7 +94,7 @@ export function Sidebar({ variant }: { variant: WindowMode }) {
         <span className="flex-1 text-[10.5px] font-medium uppercase tracking-wide text-ink-muted/60">
           会话
         </span>
-        <SideButton label="新建会话" onClick={() => void newSession()}>
+        <SideButton label="新建会话" onClick={() => void createSession()}>
           <Plus size={13} />
         </SideButton>
         <SideButton label="收起侧边栏" onClick={toggle}>
@@ -146,63 +102,8 @@ export function Sidebar({ variant }: { variant: WindowMode }) {
         </SideButton>
       </div>
 
-      {!compact && (
-        <div className="relative px-2">
-          <Search
-            size={11}
-            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-muted/50"
-          />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索会话"
-            className="w-full rounded-md border border-border-subtle bg-surface py-1 pl-6 pr-2 text-[11.5px] outline-none transition placeholder:text-ink-muted/50 focus:border-accent/50"
-          />
-        </div>
-      )}
-
-      <div className="mt-1.5 min-h-0 flex-1 overflow-y-auto scroll-thin px-1.5 pb-1">
-        {loading && sessions.length === 0 && (
-          <div className="px-2 py-2 text-[11px] text-ink-muted/60">加载中…</div>
-        )}
-        {!loading && filtered.length === 0 && (
-          <div className="px-2 py-3 text-center text-[11px] leading-relaxed text-ink-muted/60">
-            {query ? "没有匹配的会话" : "此目录暂无历史会话"}
-          </div>
-        )}
-        {filtered.map((s) => {
-          const active = s.path === currentFile;
-          return (
-            <button
-              key={s.path}
-              type="button"
-              onClick={() => pickSession(s.path)}
-              className={cn(
-                "group mb-0.5 flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition",
-                active ? "bg-accent-soft" : "hover:bg-surface-raised",
-              )}
-            >
-              <span className="flex w-full items-center gap-1">
-                <MessageSquare
-                  size={10}
-                  className={cn("shrink-0", active ? "text-accent" : "text-ink-muted/50")}
-                />
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-[11.5px]",
-                    active ? "font-medium text-accent" : "text-ink",
-                  )}
-                >
-                  {s.name || s.sessionId.slice(0, 8) || "未命名"}
-                </span>
-              </span>
-              <span className="pl-3.5 text-[10px] text-ink-muted/60">
-                {formatWhen(s.modifiedMs)} · {formatSize(s.sizeBytes)}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      {/* 分组 + 打开的会话 + 历史会话（REQ-341） */}
+      <SessionGroups compact={compact} />
 
       {!compact && (
         <>
@@ -261,23 +162,6 @@ function SideButton({
   );
 }
 
-function formatWhen(ms: number): string {
-  if (!ms) return "";
-  const d = new Date(ms);
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  if (sameDay) {
-    return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-  }
-  return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}K`;
-  return `${(bytes / 1024 / 1024).toFixed(1)}M`;
-}
-
 // ---- 设置面板 --------------------------------------------------------------
 
 function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -317,17 +201,6 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
   };
 
   const levels = ["off", "low", "medium", "high"];
-
-  /** 用系统的目录选择框挑工作目录；取消就不动。 */
-  const browse = async () => {
-    if (!draft) return;
-    try {
-      const picked = await configClient.pickDirectory(draft.cwd);
-      if (picked) setDraft({ ...draft, cwd: picked });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
 
   return (
     <div
@@ -376,33 +249,17 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
           </div>
         </Group>
 
-        {draft ? (
-          <Group label="工作目录">
-            <div className="flex gap-1">
-              <input
-                value={draft.cwd}
-                onChange={(e) => setDraft({ ...draft, cwd: e.target.value })}
-                placeholder="~"
-                spellCheck={false}
-                className="min-w-0 flex-1 rounded border border-border-subtle bg-surface px-1.5 py-1 font-mono text-[10.5px] outline-none focus:border-accent/50"
-              />
-              <button
-                type="button"
-                onClick={() => void browse()}
-                className="shrink-0 rounded border border-border-subtle bg-surface px-1.5 text-[10.5px] text-ink-muted transition hover:bg-surface-sunken hover:text-ink"
-              >
-                浏览…
-              </button>
-            </div>
-            <div className="mt-1 text-[10px] leading-snug text-ink-muted/60">
-              Agent 的工具在这个目录下运行，会话也按它归组。保存后 Agent 会重启并新建会话。
-            </div>
-          </Group>
-        ) : (
-          <Group label="工作目录">
-            <div className="selectable break-all text-[10px] leading-snug text-ink-muted">{cwd || "—"}</div>
-          </Group>
-        )}
+        <Group label="工作分组">
+          <div className="selectable break-all text-[10px] leading-snug text-ink-muted">
+            {draft?.activeGroupId
+              ? draft.groups.find((g) => g.id === draft.activeGroupId)?.path ?? cwd ?? "—"
+              : (cwd || "—")}
+          </div>
+          <div className="mt-1 text-[10px] leading-snug text-ink-muted/60">
+            工作目录改由左侧「分组」管理：一个分组就是一个目录，可放多个分组、随时切换。
+            会话按分组归组，关闭的进历史会话。
+          </div>
+        </Group>
 
         {draft && (
           <>

@@ -20,6 +20,7 @@ import type {
   WindowMode,
 } from "@shared/protocol";
 import { agentClient, cachedCommands, configClient, windowClient } from "@/services/agentClient";
+import { ensureGroups, openSession } from "@shared/session-groups";
 import type { AppConfig } from "@shared/protocol";
 
 /** 悬浮窗展开会话侧边栏时的窗口高度（逻辑像素）：表头 + 约 8 行会话。 */
@@ -83,6 +84,7 @@ interface AgentStore {
   switchSession: (path: string) => Promise<void>;
   /** 重新取一次会话状态并 hydrate（扩展发起的切换、外部改动后用）。 */
   refreshSession: () => Promise<void>;
+  restoreAfterRestart: () => Promise<void>;
   refreshStats: () => Promise<void>;
   setMode: (mode: WindowMode) => Promise<void>;
   /** 宿主改了窗口形态：只同步状态，不回写宿主。 */
@@ -92,6 +94,15 @@ interface AgentStore {
   respondUi: (confirmed: boolean, value?: string) => Promise<void>;
   dismissUi: () => void;
   setBootError: (msg: string | null) => void;
+  /** 往对话流推一条界面提示（info 级）。 */
+  pushNotice: (text: string) => void;
+  /** 把当前会话登记到激活分组的「打开」清单（新会话、重启后恢复都走它）。 */
+  registerCurrentSession: () => Promise<void>;
+  /**
+   * 在激活分组里新建会话（侧边栏按钮与分组头共用）。
+   * 空分组且目录与当前 runtime cwd 不同时，先以该目录启动一次（只有这种情况要重启）。
+   */
+  createSessionInActiveGroup: () => Promise<void>;
   reloadConfig: () => Promise<void>;
   saveConfig: (cfg: AppConfig) => Promise<void>;
   setModel: (provider: string, modelId: string) => Promise<void>;
@@ -449,6 +460,22 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set(hydrate(state));
   },
 
+  /**
+   * Agent 重启后（改 extensions、空分组首次新建等）恢复现场。
+   * 只做「新建会话」：切分组已改为不重启（pi 会跟随会话自己的 cwd）。
+   */
+  async restoreAfterRestart() {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        await get().newSession();
+        await get().registerCurrentSession();
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+      }
+    }
+  },
+
   async refreshSession() {
     // 只 hydrate，不清空：调用方已经按需重置（sessionReplaced 分支）。
     try {
@@ -533,6 +560,61 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set({ bootError: msg });
   },
 
+  pushNotice(text) {
+    set((s) => ({ messages: [...s.messages, notice(text, "info")] }));
+  },
+
+  async createSessionInActiveGroup() {
+    try {
+      const cfg = await configClient.get();
+      const st = ensureGroups(
+        { groups: cfg.groups, activeGroupId: cfg.activeGroupId, openSessions: cfg.openSessions },
+        cfg.cwd,
+      );
+      const group = st.groups.find((g) => g.id === st.activeGroupId);
+      const opened = group ? (st.openSessions[group.id] ?? []) : [];
+      if (group && opened.length === 0 && group.path !== cfg.cwd) {
+        // pi 的 newSession 用当前 runtime cwd，所以空分组首次新建必须以该目录启动。
+        await get().saveConfig({
+          ...cfg,
+          groups: st.groups,
+          activeGroupId: st.activeGroupId,
+          openSessions: st.openSessions,
+          cwd: group.path,
+        });
+        return; // 重启后 restoreAfterRestart 会新建 + 登记
+      }
+      await get().newSession();
+      await get().registerCurrentSession();
+    } catch (e) {
+      set((s) => ({ messages: [...s.messages, notice(errText(e), "error")] }));
+    }
+  },
+
+  async registerCurrentSession() {
+    try {
+      const file = get().sessionFile ?? (await agentClient.state()).sessionFile;
+      if (!file) return;
+      const cfg = await configClient.get();
+      const st = ensureGroups(
+        { groups: cfg.groups, activeGroupId: cfg.activeGroupId, openSessions: cfg.openSessions },
+        cfg.cwd,
+      );
+      const group = st.groups.find((g) => g.id === st.activeGroupId);
+      if (!group) return;
+      if ((st.openSessions[group.id] ?? []).includes(file)) return;
+      const next = openSession(st, group.id, file);
+      await get().saveConfig({
+        ...cfg,
+        groups: next.groups,
+        activeGroupId: next.activeGroupId,
+        openSessions: next.openSessions,
+      });
+    } catch {
+      // 登记失败不影响当前对话，下次新建/切换会再登记。
+    }
+  },
+
   async reloadConfig() {
     set({ config: await configClient.get() });
   },
@@ -540,8 +622,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   async saveConfig(cfg) {
     await configClient.set(cfg);
     set({ config: cfg });
-    const state = await agentClient.state();
-    set(hydrate(state));
+    // 保存已经生效。改 cwd / extensions 会让主进程重启 Agent，重启期间取状态会抛
+    // 「Agent 子进程已停止」——这里绝不能让它冒泡：否则调用方（切分组、关会话）
+    // 看起来失败且会把旧 config 写回去。恢复现场交给 reset → restoreAfterRestart。
+    try {
+      set(hydrate(await agentClient.state()));
+    } catch {
+      // Agent 正在重启，等它起来后由 onReset 恢复。
+    }
   },
 
   async setModel(provider, modelId) {

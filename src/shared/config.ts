@@ -1,4 +1,4 @@
-import type { AppConfig } from "./protocol";
+import type { AppConfig, SessionGroup } from "./protocol";
 
 /** 窗口尺寸下限，创建窗口时作为 minWidth / minHeight，也是 resize 的夹取下限。 */
 export const MIN_WINDOW = { width: 420, height: 56 } as const;
@@ -19,6 +19,9 @@ export function defaultConfig(homeDir: string): AppConfig {
     fullMaximized: false,
     lastModel: null,
     panelUrl: "",
+    groups: [],
+    activeGroupId: null,
+    openSessions: {},
   };
 }
 
@@ -41,6 +44,9 @@ export function resolveConfig(raw: unknown, homeDir: string): AppConfig {
     fullMaximized: bool(raw.fullMaximized, d.fullMaximized),
     lastModel: modelRef(raw.lastModel),
     panelUrl: text(raw.panelUrl) ?? d.panelUrl,
+    groups: groups(raw.groups),
+    activeGroupId: text(raw.activeGroupId) ?? null,
+    openSessions: openSessions(raw.openSessions),
   };
 }
 
@@ -98,4 +104,31 @@ export function resolveSize(
 
 function pick(want: number | null, cur: number, min: number): number {
   return typeof want === "number" && Number.isFinite(want) ? Math.max(want, min) : cur;
+}
+
+/** 分组列表：脏数据（缺 path / 重复 id）逐项丢弃，不让坏配置把侧边栏搞崩。 */
+function groups(v: unknown): SessionGroup[] {
+  if (!Array.isArray(v)) return [];
+  const out: SessionGroup[] = [];
+  const seen = new Set<string>();
+  for (const item of v) {
+    if (!isRecord(item)) continue;
+    const path = text(item.path);
+    const id = text(item.id);
+    if (!path || !id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, path, label: text(item.label) ?? path.replace(/[/\\]+$/, "").split(/[/\\]+/).pop() ?? path });
+  }
+  return out;
+}
+
+/** 打开会话清单：只保留「groupId → 字符串数组」这一种形状。 */
+function openSessions(v: unknown): Record<string, string[]> {
+  if (!isRecord(v)) return {};
+  const out: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(v)) {
+    if (!Array.isArray(value)) continue;
+    out[key] = value.filter((p): p is string => typeof p === "string" && p.length > 0);
+  }
+  return out;
 }

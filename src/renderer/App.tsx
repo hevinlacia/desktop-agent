@@ -23,7 +23,7 @@ export default function App() {
   const bootstrap = useAgentStore((s) => s.bootstrap);
   const applyEvent = useAgentStore((s) => s.applyEvent);
   const setBootError = useAgentStore((s) => s.setBootError);
-  const newSession = useAgentStore((s) => s.newSession);
+  const restoreAfterRestart = useAgentStore((s) => s.restoreAfterRestart);
   const send = useAgentStore((s) => s.send);
   const applyHostMode = useAgentStore((s) => s.applyHostMode);
 
@@ -42,7 +42,8 @@ export default function App() {
 
     track(onAgentEvent(applyEvent));
     track(onBootError(setBootError));
-    track(onReset(() => void newSession()));
+    // Agent 重启后恢复该分组打开的会话，而不是白建一个空会话（REQ-341）。
+    track(onReset(() => void restoreAfterRestart()));
     track(onExternalAsk((text) => void send(text)));
     // 窗口形态以宿主为准。先订阅再取当前值，两者之间不会漏掉变更。
     track(onModeChanged(applyHostMode));
@@ -52,7 +53,7 @@ export default function App() {
       cancelled = true;
       for (const d of disposers) d();
     };
-  }, [bootstrap, applyEvent, setBootError, newSession, send, applyHostMode]);
+  }, [bootstrap, applyEvent, setBootError, restoreAfterRestart, send, applyHostMode]);
 
   // 全局键盘：Esc 收起窗口（除非焦点在对话框里）。
   useEffect(() => {

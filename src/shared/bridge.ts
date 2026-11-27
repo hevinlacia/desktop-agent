@@ -56,6 +56,7 @@ export const COMMANDS = [
   "agent_set_thinking_level",
   "agent_extension_ui_response",
   "agent_sessions",
+  "agent_sessions_all",
   "agent_commands",
   "agent_models",
   "window_hide",
@@ -86,6 +87,8 @@ export interface CommandIO {
   agent_set_thinking_level: { args: { level: string }; result: void };
   agent_extension_ui_response: { args: { response: ExtensionUiResponse }; result: void };
   agent_sessions: { args: null; result: SessionSummary[] };
+  /** 跨所有工作目录的会话（历史会话不绑定 cwd）。 */
+  agent_sessions_all: { args: null; result: SessionSummary[] };
   /** 斜杠命令联想用的命令列表。 */
   agent_commands: { args: null; result: SlashCommand[] };
   /** 切换模型用的可选列表：当前有可用凭据的模型。 */

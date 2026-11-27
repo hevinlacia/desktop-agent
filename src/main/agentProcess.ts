@@ -227,6 +227,11 @@ export class AgentProcess {
     return this.send<SessionSummary[]>((id) => ({ id, cmd: "sessions" }));
   }
 
+  /** 跨所有工作目录的会话（历史会话用）。 */
+  sessionsAll() {
+    return this.send<SessionSummary[]>((id) => ({ id, cmd: "sessionsAll" }));
+  }
+
   /** 斜杠命令联想用的命令列表。 */
   commands() {
     return this.send<SlashCommand[]>((id) => ({ id, cmd: "commands" }));

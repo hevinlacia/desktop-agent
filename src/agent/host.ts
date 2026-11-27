@@ -28,6 +28,7 @@ import type { EarlierMessagesResult } from "@shared/protocol";
 import { mapSessionEvent, toChatMessage, toModelInfo, toSessionSummary } from "./mapping";
 import { createPlainTheme } from "./plain-theme";
 import { clampPoolSize, pageSlice, pickEvict, pickIdle, type PoolEntryState } from "./sessionPool";
+import { scanGroupSessionDirs } from "./sessionScan";
 import { SESSION_MESSAGES_PAGE } from "@shared/protocol";
 
 type ExtensionBindings = Parameters<AgentSession["bindExtensions"]>[0];
@@ -322,7 +323,8 @@ export class AgentHost {
       case "sessions":
         return this.sessions();
       case "sessionsAll":
-        return await this.sessionsAll();
+        this.lastSessionsAllCwds = req.cwds;
+        return await this.sessionsAll(req.cwds);
       case "commands":
         return this.commands();
       case "models":
@@ -407,11 +409,53 @@ export class AgentHost {
   }
 
   /** 跨所有工作目录的会话：历史会话分组不绑定 cwd，所以要看全局。 */
-  private async sessionsAll(): Promise<SessionSummary[]> {
-    const list = await this.pi.SessionManager.listAll();
-    return list
-      .map((info) => toSessionSummary(info, fileSize(info.path)))
-      .sort((a, b) => b.modifiedMs - a.modifiedMs);
+  // ---- 会话列表缓存（REQ-346 修复轮二） -----------------------------------
+  // 实测：pi 的 listAll 对每个文件全量逐行 parse，1929 个文件几百 MB 时单次 12-16s，
+  // 且 agent 命令队列串行，会把下一次 switchSession 堵在后面（表现为「点切换没反应」）。
+  // 策略（性能优化 + 按需加载双层）：
+  // ① 扫描本身换成 sessionScan 的头部读取（每文件只读 64KB，分组合计亚秒级）；
+  // ② stale-while-revalidate：缓存新鲜直接回；过期立即回旧值并后台单航刷新；
+  // ③ 渲染层只在历史面板可见时才调（懒加载），切换/新建零调用。
+  private static readonly SESSIONS_CACHE_TTL_MS = 300_000;
+  private sessionsAllCache: { key: string; at: number; list: SessionSummary[] } | null = null;
+  private sessionsAllRefreshing = false;
+  /** 最近一次 sessionsAll 的分组目录：新建会话失效后用它后台重扫。 */
+  private lastSessionsAllCwds: string[] | null = null;
+
+  private async sessionsAll(cwds: string[]): Promise<SessionSummary[]> {
+    const t0 = Date.now();
+    const key = [...new Set(cwds)].sort().join("|");
+    const cached = this.sessionsAllCache;
+    if (cached && cached.key === key && Date.now() - cached.at < AgentHost.SESSIONS_CACHE_TTL_MS) {
+      return cached.list;
+    }
+    if (cached && cached.key === key) {
+      // 缓存过期：旧值立即回（低优先级视图），后台刷新，不堵命令队列。
+      this.refreshSessionsAllInBackground(cwds);
+      return cached.list;
+    }
+    // 首次（或分组集合变化）：阻塞扫一次——分组口径下只读头部，很快。
+    const list = await scanGroupSessionDirs(this.agentDir, cwds);
+    this.sessionsAllCache = { key, at: Date.now(), list };
+    this.log("info", `分组会话列表已扫描：${list.length} 条（${Date.now() - t0}ms）`);
+    return list;
+  }
+
+  private refreshSessionsAllInBackground(cwds: string[]) {
+    if (this.sessionsAllRefreshing) return;
+    this.sessionsAllRefreshing = true;
+    const t0 = Date.now();
+    void (async () => {
+      try {
+        const list = await scanGroupSessionDirs(this.agentDir, cwds);
+        this.sessionsAllCache = { key: [...new Set(cwds)].sort().join("|"), at: Date.now(), list };
+        this.log("info", `分组会话列表已后台刷新：${list.length} 条（${Date.now() - t0}ms）`);
+      } catch (err) {
+        this.log("warn", `刷新分组会话列表失败（保留旧值）：${errorMessage(err)}`);
+      } finally {
+        this.sessionsAllRefreshing = false;
+      }
+    })();
   }
 
   private async sessions(): Promise<SessionSummary[]> {
@@ -419,6 +463,12 @@ export class AgentHost {
     return list
       .map((info) => toSessionSummary(info, fileSize(info.path)))
       .sort((a, b) => b.modifiedMs - a.modifiedMs);
+  }
+
+  /** 新会话落盘后调用：列表缓存失效并后台重扫，让新会话尽快出现在名字表/历史里。 */
+  private invalidateSessionsCache() {
+    this.sessionsAllCache = null;
+    if (this.lastSessionsAllCwds) this.refreshSessionsAllInBackground(this.lastSessionsAllCwds);
   }
 
   /** 当前有可用凭据的模型，切换模型的下拉列表用。 */
@@ -477,7 +527,11 @@ export class AgentHost {
   private async newSession(opts?: Parameters<AgentSessionRuntime["newSession"]>[0]) {
     const wanted = this.lastModel;
     const result = await this.runtime.newSession(opts);
-    if (!result.cancelled) await this.applyLastModel(wanted);
+    if (!result.cancelled) {
+      await this.applyLastModel(wanted);
+      // 新会话文件已落盘：列表缓存失效并后台重扫，名字表/历史里尽快出现（REQ-346）。
+      this.invalidateSessionsCache();
+    }
     this.lastModel = refOf(this.session.model);
     return result;
   }

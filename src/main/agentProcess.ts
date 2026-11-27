@@ -239,9 +239,9 @@ export class AgentProcess {
     return this.send<SessionSummary[]>((id) => ({ id, cmd: "sessions" }));
   }
 
-  /** 跨所有工作目录的会话（历史会话用）。 */
-  sessionsAll() {
-    return this.send<SessionSummary[]>((id) => ({ id, cmd: "sessionsAll" }));
+  /** 历史会话（REQ-346 修复轮二）：只扫现有分组的目录，不再全局扫描。 */
+  sessionsAll(cwds: string[]) {
+    return this.send<SessionSummary[]>((id) => ({ id, cmd: "sessionsAll", cwds }));
   }
 
   /** 斜杠命令联想用的命令列表。 */

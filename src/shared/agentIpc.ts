@@ -41,7 +41,7 @@ export type AgentRequest =
   | { id: number; cmd: "switchSession"; sessionPath: string }
   | { id: number; cmd: "sessions" }
   /** 跨所有工作目录的会话（历史会话用：历史不绑定 cwd）。 */
-  | { id: number; cmd: "sessionsAll" }
+  | { id: number; cmd: "sessionsAll"; cwds: string[] }
   | { id: number; cmd: "commands" }
   | { id: number; cmd: "models" }
   | { id: number; cmd: "stats" }

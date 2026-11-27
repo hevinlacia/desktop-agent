@@ -25,6 +25,7 @@ import type {
 } from "@shared/protocol";
 import type { AgentInitOptions, AgentRequest, LogLevel } from "@shared/agentIpc";
 import { mapSessionEvent, toChatMessage, toModelInfo, toSessionSummary } from "./mapping";
+import { createPlainTheme } from "./plain-theme";
 
 type ExtensionBindings = Parameters<AgentSession["bindExtensions"]>[0];
 type ExtensionUIContext = NonNullable<ExtensionBindings["uiContext"]>;
@@ -366,7 +367,8 @@ export class AgentHost {
       editor,
       notify,
       onTerminalInput: () => () => undefined,
-      theme: { fg: "#cccccc", bg: "#111111" },
+      // 素主题：契约里 fg/bg 是函数，恒等返回原文（见 plain-theme.ts，REQ-339）。
+      theme: createPlainTheme(),
     };
 
     // 其余是 TUI 专用能力（状态栏、组件、主题切换……），对桌面宿主没有意义，一律空实现，
@@ -394,9 +396,9 @@ export class AgentHost {
       addAutocompleteProvider: noop,
       setEditorComponent: noop,
       getEditorComponent: () => undefined,
-      theme: new Proxy({}, { get: () => "#999999" }),
-      getAllThemes: () => [],
-      getTheme: () => undefined,
+      theme: createPlainTheme(),
+      getAllThemes: () => [createPlainTheme()],
+      getTheme: () => createPlainTheme(),
       setTheme: () => ({ success: false, error: "桌面宿主不支持切换主题" }),
       getToolsExpanded: () => false,
       setToolsExpanded: noop,

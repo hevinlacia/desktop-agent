@@ -27,6 +27,12 @@ export type AgentEvent =
   | { type: "usage"; sessionId: string; usage: Usage }
   | { type: "messageCommitted"; sessionId: string; message: ChatMessage }
   | { type: "sessionInfo"; sessionId: string; name?: string; sessionFile?: string }
+  /**
+   * 会话被替掉（新建 / 切换）。扩展自己发起的切换不经过渲染进程，渲染层必须靠这条
+   * 事件跟上，否则新会话的事件会被当成「过期会话」全部丢掉（界面看起来死掉）。
+   * 这条事件必须在 sessionId 过滤之前处理。
+   */
+  | { type: "sessionReplaced"; sessionId: string; previousSessionId: string | null }
   | { type: "compaction"; sessionId: string; phase: "start" | "end"; reason?: string }
   | { type: "error"; sessionId: string; message: string }
   /** 需要用户在 UI 上作答的扩展对话框（权限确认等）。 */

@@ -60,6 +60,8 @@ export class AgentHost {
   private runtime!: InstanceType<typeof Pi.AgentSessionRuntime>;
   private session!: AgentSession;
   private unsubscribe: (() => void) | undefined;
+  /** 上一次 rebind 时的会话 id：用来发现「不经过渲染进程的会话替换」（如扩展调 ctx.switchSession）。 */
+  private lastSessionId: string | null = null;
 
   // ---- 生命周期 ---------------------------------------------------------
 
@@ -117,6 +119,15 @@ export class AgentHost {
         this.send({ kind: "event", event: mapped });
       }
     });
+
+    // 扩展发起的切换（如 /resume-session 调 ctx.switchSession）不经过渲染进程，
+    // 渲染层不知道会话换了；不同步的话它会把新会话的事件全当成过期事件丢掉，
+    // 界面看起来就死了。这里主动广播一条 sessionReplaced 让渲染层重新 hydrate。
+    const previousSessionId = this.lastSessionId;
+    this.lastSessionId = this.session.sessionId;
+    if (previousSessionId && previousSessionId !== this.session.sessionId) {
+      this.emit({ type: "sessionReplaced", previousSessionId });
+    }
 
     await this.session.bindExtensions({
       uiContext: this.createUiContext(),

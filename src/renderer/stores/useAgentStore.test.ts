@@ -200,3 +200,55 @@ describe("useAgentStore 发送斜杠命令（REQ-338 复测）", () => {
     expect(userMessages()).toHaveLength(0);
   });
 });
+
+describe("useAgentStore 会话替换跟随（REQ-339）", () => {
+  beforeEach(() => {
+    useAgentStore.setState({
+      sessionId: "old-session",
+      extensionUi: null,
+      messages: [],
+      running: false,
+      commandRunning: false,
+    });
+  });
+
+  it("sessionReplaced 抢在 sessionId 过滤之前生效（否则界面再也收不到新会话事件）", async () => {
+    useAgentStore.getState().applyEvent({
+      type: "sessionReplaced",
+      sessionId: "new-session",
+      previousSessionId: "old-session",
+    });
+    expect(useAgentStore.getState().sessionId).toBe("new-session");
+  });
+
+  it("新会话事件不再被当成过期事件丢掉", () => {
+    useAgentStore.getState().applyEvent({
+      type: "sessionReplaced",
+      sessionId: "new-session",
+      previousSessionId: "old-session",
+    });
+    useAgentStore.getState().applyEvent({
+      type: "runStarted",
+      sessionId: "new-session",
+    });
+    expect(useAgentStore.getState().running).toBe(true);
+  });
+
+  it("会话替换保留刚到的界面提示（如「已恢复会话」）", () => {
+    useAgentStore.getState().applyEvent({
+      type: "extensionUi",
+      sessionId: "old-session",
+      request: { kind: "notify", id: "", message: "✅ 已恢复会话 abc", level: "info" },
+    });
+    useAgentStore.getState().applyEvent({
+      type: "sessionReplaced",
+      sessionId: "new-session",
+      previousSessionId: "old-session",
+    });
+    const texts = useAgentStore
+      .getState()
+      .messages.filter((m) => m.role === "notice")
+      .map((m) => (m.role === "notice" ? m.text : ""));
+    expect(texts).toContain("✅ 已恢复会话 abc");
+  });
+});

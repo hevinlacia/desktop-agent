@@ -1,0 +1,43 @@
+src/renderer/lib/highlight.test.ts
+  6169d3ce412af12f 1-28
+src/renderer/components/layout/Sidebar.tsx
+  6169d3ce412af12f 419-420
+src/renderer/lib/highlight.ts
+  6169d3ce412af12f 9,34-61,66,75,111-117
+src/main/index.ts
+  6169d3ce412af12f 14-15,244-259,262,267,276-277,280,283
+src/main/shortcutPolicy.ts
+  6169d3ce412af12f 1-39
+docs/decisions/0003-global-shortcut.md
+  6169d3ce412af12f 1-30
+src/shared/config.test.ts
+  6169d3ce412af12f 22,28-33
+src/shared/config.ts
+  6169d3ce412af12f 36,69-75
+src/main/shortcutPolicy.test.ts
+  6169d3ce412af12f 1-42
+src/main/shortcut.ts
+  6169d3ce412af12f 9-12,15,26-36,40-44
+README.md
+  6169d3ce412af12f 83-94,99,104-109,144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c514bbe91c19fd3a90c05cfaa4c3d40242fc97d8",
+  "prompts": {
+    "6169d3ce412af12f": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a21ac1-09ba-7675-8951-9623744f0fb6",
+        "model": "medium-model-auto"
+      },
+      "human_author": "hevinlacia <hevinlacia@gmail.com>",
+      "messages": [],
+      "total_additions": 278,
+      "total_deletions": 36,
+      "accepted_lines": 264,
+      "overriden_lines": 0
+    }
+  }
+}
